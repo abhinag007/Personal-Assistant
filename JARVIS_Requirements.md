@@ -9,13 +9,14 @@ A private, always-on, voice-driven personal assistant that remembers everything,
 
 ---
 
-## 1. Core Intelligence — OpenAI Now, Local Later
-The assistant uses a **pluggable model layer** so the brain can be swapped without touching the rest of the system.
+## 1. Core Intelligence — Selectable Brain (Local or Cloud, per task)
+The assistant uses a **pluggable model layer** so the brain can be swapped — or **chosen per task** — without touching the rest of the system. This is the answer to the local-reasoning ceiling: you're never locked to a weak model.
 
-- **During development:** runs on **OpenAI** for faster, higher-quality iteration.
-- **After development is complete:** switches to a **local LLM via Ollama** (Llama 3 / Qwen / Mistral) and runs fully offline — no data leaves the PC.
-- The switch is a config change, not a rewrite — everything downstream (memory, agents, voice) is model-agnostic.
-- API keys (OpenAI now, any provider later) live in the encrypted vault (§14), never in plain text.
+- **Three selectable brains:** (a) **local model** (Ollama, or a bigger model hosted on a strong/rented GPU), (b) **OpenAI API**, (c) **Claude API**. All behind one adapter.
+- **Per-task choice, not permanent:** simple/private tasks → local (free, nothing leaves the PC); hard reasoning → cloud (OpenAI/Claude) for full power. A bigger **GPU-hosted local model** (e.g. 70B) closes most of the gap while staying private.
+- **Cloud use is visible, not silent:** routing a task to a cloud API means that request leaves the PC, so the assistant flags it ("this needs the cloud brain — ok?") per the approval/narration gates (§11/§37). Local stays the private default.
+- **During development:** run on OpenAI for speed; the selection UI/logic is built in from the start so going local later is a config flip, not a rewrite.
+- API keys (OpenAI, Claude, any provider) live in the encrypted vault (§14), never in plain text.
 
 ## 2. Auto-Start on Boot
 The assistant launches automatically when the PC starts and runs silently in the background.
@@ -163,13 +164,13 @@ It holds a natural back-and-forth, not one isolated command at a time.
 - Remembers the **last N turns** so "and do the same for that one" works without re-explaining.
 - Short-term dialog context is separate from long-term memory (§8) and clears when the conversation ends.
 
-## 20. Reasoning Tier — Honest Model Strategy *(new)*
-Local-only means reasoning is capped by the local model's size; this is planned for, not hidden.
+## 20. Reasoning Tier — Solved by Selectable Brains *(new)*
+The local-reasoning ceiling is **solved by choice** (§1): the assistant escalates to a stronger brain when a task is hard, instead of being stuck.
 
 - Default: a fast local model for everyday tasks and low latency.
-- Optional **larger local model** (e.g. 70B, needs a strong GPU) for harder planning — enable when hardware allows.
-- The cloud switch (§1, off by default) remains the escape hatch for the hardest reasoning if you ever choose to turn it on.
-- The assistant knows its own limits and says "this is a hard one, want me to use the bigger model?" rather than failing quietly.
+- **Escalation ladder for hard tasks:** larger **GPU-hosted local model** (e.g. 70B — private) → **Claude / OpenAI API** (full power, leaves the PC).
+- The assistant knows its own limits and asks: *"this is a hard one — use the bigger local model, or the cloud brain?"* — never fails silently.
+- Cloud escalation is flagged since it leaves the PC (§1, §11); local escalation stays private.
 
 ## 21. Graceful Failure & Transparency *(new)*
 When an autonomous task can't be completed, it explains — never stalls silently.

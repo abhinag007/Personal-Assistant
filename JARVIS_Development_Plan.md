@@ -10,13 +10,14 @@ Honest list of what will actually be hard, rated by **Impact** (how badly it hur
 
 ### A1. Latency / real-time voice feel — **Impact: High · Difficulty: High**
 The single biggest "does it feel like Jarvis" factor. Sub-1.5s to first word means STT, LLM, and TTS must overlap, and models must stay warm. Any blocking call in the loop kills the feel.
-- **Mitigation:** stream everything (partial STT → partial tokens → sentence-chunked TTS); keep models resident; run all heavy work off the brain loop on the worker pool; measure TTFW (time-to-first-word) as a first-class metric from day one.
-- **Handled when:** median TTFW < 1.5s on your hardware across 20 varied prompts.
+- **Approach (build-first, optimize-last):** don't over-optimize early. Build the full working pipeline, let **LangSmith trace every component's timing** (§2A.5), then in a dedicated pass attack the slowest spans with real data. Guardrail: *measure* TTFW from Phase 1 (one cheap number) even though you don't *optimize* it until later — so drift is visible. Tracking ≠ optimizing.
+- **Mitigation (during the optimization pass):** stream everything (partial STT → partial tokens → sentence-chunked TTS); keep models resident; run all heavy work off the brain loop on the worker pool.
+- **Handled when:** median TTFW < 1.5s on your hardware across 20 varied prompts, achieved by fixing the specific spans the traces flagged.
 
-### A2. Local model reasoning ceiling — **Impact: High · Difficulty: High (partly unfixable)**
-A 7–8B local model is meaningfully weaker at planning/tool-orchestration than OpenAI. Building on OpenAI then swapping local risks a quality cliff.
-- **Mitigation:** keep tool schemas strict so the model orchestrates rather than free-reasons; complexity router (§20) sends hard tasks to bigger models; **build the adapter conformance suite early** and run it against local models continuously so the cliff is visible, not a surprise at Phase 5.
-- **Handled when:** the conformance suite passes ≥ target threshold on Qwen3/Gemma, and you've consciously accepted the gap for tasks it can't.
+### A2. Local model reasoning ceiling — **Impact: High · Difficulty: Medium (design-solved)**
+A 7–8B local model is weaker at planning/tool-orchestration than frontier cloud models. **Resolved by making the brain selectable per task (§1/§20):** local for simple/private work, a **GPU-hosted bigger local model** or **Claude/OpenAI API** for hard reasoning. So the ceiling is a routing choice, not a wall.
+- **Mitigation:** keep tool schemas strict so the model orchestrates rather than free-reasons; complexity router escalates hard tasks up the ladder (local → big-local → cloud); cloud escalation is flagged since it leaves the PC; build the adapter conformance suite early so quality per brain is measurable.
+- **Handled when:** the escalation ladder works end-to-end (a hard task correctly routes to a stronger brain with your consent), and the conformance suite runs across all three brains.
 
 ### A3. Always-on resource contention — **Impact: High · Difficulty: Medium**
 Wake-word listener + STT + LLM + TTS + background brain + nightly consolidation all competing for CPU/GPU. Naively, background work will stutter your voice or cook the machine.
@@ -108,8 +109,9 @@ Six phases. Each has: **Goal · Build · Definition of Done · Testing focus.** 
 *Spec: §6, §7, §9, §11, §16 (full), §21, §30, §26, §38, §39, §40; workflow §2A*
 - **Goal:** it does real work, safely, and handles its own failures.
 - **Build:** planner (M2 single-agent loop first); then M3 supervisor + dynamic sub-agent creation + critic/review; durable task queue + background execution; **full approval engine** (reversibility check + human-in-the-loop interrupts); graceful failure + presence-aware blocked-task handoff; staging folder + decision journal; calendar/reminders, email/messaging (read+draft, gated send), daily briefing.
+- **Bootstrap the minimal Telegram channel here** (send + basic receive) — the blocked-task handoff (§30) and daily briefing (§40) need to reach your phone in this phase. Full 2-way remote control, tap-approvals, and device features come in Phase 4; Phase 2 only needs "notify me / send a simple reply."
 - **Done when:** you can give it a multi-step task, it plans → executes → asks before anything irreversible → reports back conversationally, and a captcha/login cleanly hands off to you while other work continues.
-- **Testing:** approval-gate tests (every irreversible action type stops and waits); handoff test (block → notify → resume from checkpoint); agent **budget tests** (no runaway loops); queue survives restart; email-send is impossible without explicit approval; trace trees for multi-agent runs are inspectable; journal captures what+why for each action.
+- **Testing:** approval-gate tests (every irreversible action type stops and waits); handoff test (block → **Telegram notify** → resume from checkpoint); agent **budget tests** (no runaway loops); queue survives restart; email-send is impossible without explicit approval; trace trees for multi-agent runs are inspectable; journal captures what+why for each action.
 
 ### Phase 3 — Self-Improvement, Skills & Proactive Brain
 *Spec: §22, §31, §32, §2A.6, §25, §29, §12, §20, §24, §27, §33, §34, §37*
@@ -119,11 +121,11 @@ Six phases. Each has: **Goal · Build · Definition of Done · Testing focus.** 
 - **Testing:** a generated tool passes its own test, registers as an MCP server, and is reusable; **self-modification red-team** (generated tool cannot touch secrets/network unapproved, cannot write to core); background brain respects resource caps; proposals never auto-act (always staging + ask); self-restart health-check triggers rollback on a deliberately broken update; grounding test (it says "not sure" instead of inventing on unknown facts).
 
 ### Phase 4 — Reach Out: Mobile, Devices, Autostart
-*Spec: §10, §28, §36, §2, §15*
+*Spec: §10 (full 2-way — minimal channel already bootstrapped in Phase 2), §28, §36, §2, §15*
 - **Goal:** it reaches you anywhere and extends into the machine/devices — all approval-gated.
-- **Build:** 2-way mobile (ntfy/Telegram) with authed inbound commands + tap approvals; presence detection routing; OS/device control (WiFi/Bluetooth/audio/apps) with propose-then-approve; device awareness/inventory; autostart-on-boot + watchdog; pause + mic mute.
-- **Done when:** away from the PC you get notified, can command and approve from your phone, it knows your connected devices, and it launches on boot and self-recovers.
-- **Testing:** inbound command auth (only your device controls it); approve-from-phone completes a gated action; presence correctly routes local vs phone; new-capability activation requires approval; boots on restart and watchdog restarts it after a kill; pause halts and resumes cleanly.
+- **Build:** **2-way mobile via a free Telegram bot** (created through @BotFather, token in vault) — outbound alerts, inbound commands, and tap-button approvals, with the chat ID **allowlisted so only your account can command it**; presence detection routing (local vs phone); OS/device control (WiFi/Bluetooth/audio/apps) with propose-then-approve; device awareness/inventory; autostart-on-boot + watchdog; pause + mic mute. *(ntfy.sh kept as a no-chat-app fallback.)*
+- **Done when:** away from the PC you get a Telegram notification, can command and approve from Telegram, it knows your connected devices, and it launches on boot and self-recovers.
+- **Testing:** **Telegram inbound auth** — only your allowlisted chat ID controls the bot, a stranger messaging it is ignored; approve-from-Telegram completes a gated action; presence correctly routes local vs phone; free-tier rate limits are never a problem at one-user volume; new-capability activation requires approval; boots on restart and watchdog restarts it after a kill; pause halts and resumes cleanly.
 
 ### Phase 5 — Go Local (privacy cutover)
 *Spec: §1 swap, §20 tune, §2A.5 swap*

@@ -109,7 +109,7 @@ Four mechanisms wrap every action, evaluated **before** anything executes:
 | **Browser automation** | **Playwright** + an LLM-driven layer (browser-use pattern) | Robust cross-browser control; LLM layer handles dynamic pages. |
 | **Desktop/OS control** | OS-native APIs + CLI (AppleScript/`osascript`, PowerShell, `nmcli`/`bluetoothctl`) | Direct, scriptable control of WiFi/Bluetooth/audio/apps (§28). |
 | **Telephony (built on demand)** | **Vapi / Retell / Twilio** via §32 tool-builder | User-funded, added only when a calling task appears — not pre-installed. |
-| **Notifications / mobile (2-way)** | **ntfy.sh** (self-hostable) or **Telegram Bot API** | Free, bidirectional (alerts out, commands in), works when away (§10). |
+| **Notifications / mobile (2-way)** | **Telegram Bot API** (confirmed primary); ntfy.sh as fallback | **Completely free** — no per-message or monthly cost; free tier (30 msg/s, 1 msg/s per chat, 50 MB files) is far beyond one-user needs. Rich 2-way: alerts out, commands + tap approvals back (§10). Bot created via @BotFather; token in vault (§14). ntfy.sh kept as a no-chat-app fallback. |
 | **Secrets vault** | age/libsodium-encrypted store, OS keychain for master key | Strong local encryption; master key in Keychain/Credential Manager. |
 | **Version control / rollback** | **git** (local) with auto-commit hooks | Per-change commits = free undo for everything in the sandbox (§17). |
 | **Observability / tracing** | **LangSmith** (dev phase) → **Langfuse self-hosted** (local phase) | Trace every LLM call, tool call, agent step, and retrieval end-to-end. LangSmith is native to LangGraph (near-zero setup) but is cloud — fine while on OpenAI; once fully local, Langfuse gives the same tracing self-hosted so no data leaves the PC. |
