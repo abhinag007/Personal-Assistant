@@ -118,6 +118,7 @@ Always run inside the activated venv (`source .venv/bin/activate`), and use the
 | `python -m jarvis.main voice-test tts` | Diagnostics: play a test sentence (is audio out working?). |
 | `python -m jarvis.main voice-test stt` | Diagnostics: record 4s and print the transcript (does it hear you?). |
 | `python -m jarvis.main voice-test mic` | Diagnostics: live mic levels for 10s (are levels reaching it?). |
+| `python -m jarvis.main bench [N]` | Benchmark time-to-first-word over N turns (§18 latency metric). |
 | `python -m jarvis.main set-model gpt-4o` | Set the main brain model (e.g. `gpt-4o`, `gpt-4o-mini`). |
 | `python -m jarvis.main set-model` | Show the current brain model. |
 | `python -m jarvis.main backup` | Encrypted snapshot of memory. |
@@ -139,7 +140,38 @@ Set before the command, e.g. `JARVIS_STT_MODEL=large-v3 python -m jarvis.main vo
 | `JARVIS_WAKE_MODE` | `stt` | Wake detection. `stt` (robust, reuses Whisper) · `model` (openWakeWord). |
 | `JARVIS_ADDRESSING` | `1` | Smart "is he talking to me?" check. `0` = off (reply to everything in a session). |
 | `JARVIS_ADDRESSING_MODEL` | `gpt-4o` | Model for that check (independent of the main brain). |
-| `JARVIS_VOICE_DEBUG` | `1` | Verbose voice logs (wake scores, capture, timing). `0` = quiet. |
+| `JARVIS_REQUIRE_OWNER` | `1` | Owner-only voice (if enrolled). `0` = respond to any voice even when enrolled. |
+| `JARVIS_SPEAKER_THRESHOLD` | `0.25` | Voice-match strictness. Lower (e.g. `0.15`) = more lenient if it rejects you. |
+| `JARVIS_VOICE_DEBUG` | `1` | Verbose voice logs (wake scores, speaker match, capture, timing). `0` = quiet. |
+| `LANGSMITH_API_KEY` | (unset) | Set it (+ `pip install langsmith`) to trace every model call in LangSmith (§2A.5). Pair with `LANGSMITH_TRACING=true` and optional `LANGSMITH_PROJECT=jarvis`. |
+
+### Owner-only voice (§3)
+
+By default Jarvis replies to any voice. To make it respond **only to you**, enroll your
+voiceprint once:
+
+```bash
+python -m jarvis.main voice-enroll     # records 3 short clips → ~/.jarvis/voiceprint.npy
+python -m jarvis.main voice            # now ignores other people's voices
+```
+
+Tuning if it rejects *your* voice — the debug log prints `speaker match 0.xx (you if ≥ 0.25)`:
+
+```bash
+JARVIS_SPEAKER_THRESHOLD=0.15 python -m jarvis.main voice   # more lenient match
+JARVIS_REQUIRE_OWNER=0 python -m jarvis.main voice          # temporarily ignore the voiceprint
+rm ~/.jarvis/voiceprint.npy && python -m jarvis.main voice-enroll   # re-enroll (quiet room)
+```
+
+### Verify LangSmith tracing (§2A.5)
+
+```bash
+pip install langsmith
+export LANGSMITH_API_KEY=lsv2_...        # from smith.langchain.com → Settings → API Keys
+export LANGSMITH_TRACING=true
+export LANGSMITH_PROJECT=jarvis          # optional
+python -m jarvis.main chat               # adapter name shows "+langsmith"; calls appear in the dashboard
+```
 
 ### Recommended setups
 

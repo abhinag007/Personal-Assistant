@@ -135,15 +135,19 @@ class SpeechBrainVerifier(SpeakerVerifier):
     def get_enrolled_vector(self):
         return self._enrolled
 
-    def is_owner(self, pcm_bytes: bytes) -> bool:
+    def owner_score(self, pcm_bytes: bytes):
+        """Cosine similarity to the enrolled voiceprint, or None if not enrolled."""
         if self._enrolled is None:
-            return True  # not enrolled yet → don't block (live loop warns)
+            return None
         import numpy as np
 
         v = self.embed(pcm_bytes)
         a, b = self._enrolled, v
-        cos = float(np.dot(a, b) / ((np.linalg.norm(a) * np.linalg.norm(b)) or 1.0))
-        return cos >= self.threshold
+        return float(np.dot(a, b) / ((np.linalg.norm(a) * np.linalg.norm(b)) or 1.0))
+
+    def is_owner(self, pcm_bytes: bytes) -> bool:
+        score = self.owner_score(pcm_bytes)
+        return True if score is None else score >= self.threshold
 
 
 class FasterWhisperSTT(STT):

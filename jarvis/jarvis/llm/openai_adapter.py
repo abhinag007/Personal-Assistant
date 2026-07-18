@@ -26,9 +26,23 @@ class OpenAIAdapter(ModelAdapter):
 
     def _client(self):
         if self.__client is None:
+            import os
+
             from openai import OpenAI  # lazy import
 
-            self.__client = OpenAI(api_key=self._api_key)
+            client = OpenAI(api_key=self._api_key)
+            # Real LangSmith tracing (§2A.5): if a LangSmith key is configured, wrap the
+            # client so every model call (chat, addressing, fact-extraction) is traced.
+            # Zero effect when LANGSMITH_API_KEY isn't set. Never breaks if the SDK is absent.
+            if os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"):
+                try:
+                    from langsmith.wrappers import wrap_openai
+
+                    client = wrap_openai(client)
+                    self.name = f"{self.name} +langsmith"
+                except Exception:
+                    pass
+            self.__client = client
         return self.__client
 
     @staticmethod

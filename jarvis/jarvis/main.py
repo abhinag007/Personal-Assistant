@@ -197,15 +197,22 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         wake = OpenWakeWord()
         stt = FasterWhisperSTT(model_size=_os.environ.get("JARVIS_STT_MODEL", "medium.en"))
         tts = KokoroTTS()
-        speaker = SpeechBrainVerifier()
+        spk_threshold = float(_os.environ.get("JARVIS_SPEAKER_THRESHOLD", "0.25"))
+        speaker = SpeechBrainVerifier(threshold=spk_threshold)
         vp = load_voiceprint(config_dir)
-        if vp is not None:
+        owner_env_on = _os.environ.get("JARVIS_REQUIRE_OWNER", "1") != "0"
+        if vp is not None and owner_env_on:
             speaker.set_enrolled_vector(vp)
             require_owner = True
+            print(f"[Jarvis] Owner-only voice ON (match ≥ {spk_threshold}). "
+                  f"Set JARVIS_REQUIRE_OWNER=0 to disable, or JARVIS_SPEAKER_THRESHOLD to tune.")
         else:
             require_owner = False
-            print("[Jarvis] No voiceprint enrolled — I'll respond to any voice for now.")
-            print("         Run 'python -m jarvis.main voice-enroll' to make me owner-only.")
+            if vp is None:
+                print("[Jarvis] No voiceprint enrolled — I'll respond to any voice.")
+                print("         Run 'python -m jarvis.main voice-enroll' to make me owner-only.")
+            else:
+                print("[Jarvis] Owner-only disabled via JARVIS_REQUIRE_OWNER=0.")
 
         import os
         debug = os.environ.get("JARVIS_VOICE_DEBUG", "1") != "0"
@@ -299,6 +306,28 @@ def _voice_test(which: str | None):
         print("Usage: python -m jarvis.main voice-test [tts|stt|mic]")
 
 
+def _bench(config_dir: Path, n_arg: str | None):
+    """Benchmark time-to-first-word (§18)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard")
+        sys.exit(1)
+    from .brain.bench import run_benchmark
+
+    brain, adapter, provider, _ = _build_brain(config_dir, cfg)
+    n = int(n_arg) if (n_arg and n_arg.isdigit()) else 8
+    print(f"[Jarvis] TTFW benchmark on {adapter.name} — {n} turns...")
+    stats = run_benchmark(brain, n=n)
+    if not stats.get("n"):
+        print("[Jarvis] no measurements.")
+        return
+    print(f"  turns:  {stats['n']}")
+    print(f"  median: {stats['median_s'] * 1000:.0f} ms   (target < 1500 ms)")
+    print(f"  p95:    {stats['p95_s'] * 1000:.0f} ms")
+    print(f"  range:  {stats['min_s'] * 1000:.0f}–{stats['max_s'] * 1000:.0f} ms")
+    print(f"  {'✓ meets target' if stats['meets_target'] else '✗ over target (latency pass needed)'}")
+
+
 def _backup(config_dir: Path, dest: str | None):
     """Phase 1 — encrypted memory backup (§42)."""
     from .backup import MemoryBackup
@@ -323,7 +352,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JARVIS")
     parser.add_argument("command", nargs="?", default="demo",
                         choices=["demo", "chat", "voice", "voice-enroll", "voice-test",
-                                 "backup", "set-model"],
+                                 "bench", "backup", "set-model"],
                         help="what to run (default: demo)")
     parser.add_argument("arg", nargs="?", default=None, help="argument for the command")
     parser.add_argument("--onboard", action="store_true", help="run first-run setup")
@@ -344,6 +373,8 @@ def main(argv: list[str] | None = None) -> None:
         _voice_enroll(config_dir)
     elif args.command == "voice-test":
         _voice_test(args.arg)
+    elif args.command == "bench":
+        _bench(config_dir, args.arg)
     elif args.command == "backup":
         _backup(config_dir, args.dest)
     elif args.command == "set-model":

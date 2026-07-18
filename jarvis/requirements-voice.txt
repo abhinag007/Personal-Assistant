@@ -10,6 +10,7 @@ kokoro>=0.9                  # local TTS voice (§5)
 sounddevice>=0.4            # mic capture + audio playback
 numpy>=1.26                  # audio buffers
 
+langsmith>=0.1               # LLM tracing during the OpenAI dev phase (§2A.5) — set LANGSMITH_API_KEY
+
 # Optional / alternatives:
 # piper-tts                  # ultra-light CPU TTS fallback (§5)
-# langsmith                  # tracing during the OpenAI dev phase (§2A.5)

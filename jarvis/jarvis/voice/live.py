@@ -197,8 +197,15 @@ class LiveVoiceLoop:
             self.log(f"[voice] captured {len(pcm) / 2 / 16000:.1f}s of audio — transcribing...")
         if check_owner and self.require_owner:
             try:
-                if not self.speaker.is_owner(pcm):
-                    return ""  # someone else spoke
+                score = self.speaker.owner_score(pcm)
+                if score is not None:
+                    if self.debug:
+                        self.log(f"[voice] speaker match {score:.2f} "
+                                 f"(you if ≥ {self.speaker.threshold})")
+                    if score < self.speaker.threshold:
+                        if self.debug:
+                            self.log("[voice] (voice didn't match your voiceprint — ignoring)")
+                        return ""  # someone else spoke
             except Exception as e:
                 self.log(f"[voice] speaker check error: {e}")
         try:
