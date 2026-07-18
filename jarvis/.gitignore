@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# JARVIS runtime data (never commit secrets, memory, or logs)
+vault/*.enc
+vault/*.key
+*.secret
+logs/
+memory/
+backups/
+.jarvis_runtime/
+
+# OS
+.DS_Store

@@ -1,0 +1,10 @@
+# JARVIS — core dependencies (Phase 0 + Phase 1 text/chat mode).
+# The brain, memory, tracing, backup, and safety spine run on just these.
+# Heavier voice/LLM packages live in requirements-voice.txt (install when running voice).
+
+cryptography>=42.0        # vault + backup encryption (Fernet / AES-GCM)
+keyring>=25.0             # OS keychain for the vault master key (macOS Keychain)
+pytest>=8.0              # test runner
+
+# Note: chat mode runs offline on the built-in MockAdapter with zero extra deps.
+# To use the real OpenAI brain, also: pip install openai   (or use requirements-voice.txt)
