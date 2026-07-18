@@ -118,6 +118,10 @@ Always run inside the activated venv (`source .venv/bin/activate`), and use the
 | `python -m jarvis.main voice-test tts` | Diagnostics: play a test sentence (is audio out working?). |
 | `python -m jarvis.main voice-test stt` | Diagnostics: record 4s and print the transcript (does it hear you?). |
 | `python -m jarvis.main voice-test mic` | Diagnostics: live mic levels for 10s (are levels reaching it?). |
+| `python -m jarvis.main agent "task"` | Run a task through the agent stack (auto M1/M2/M3) — §6, §7, §2A. |
+| `python -m jarvis.main remind "text \| +30m"` | Add a reminder (`+30m`, `+2h`, `+1d`) — §38. |
+| `python -m jarvis.main brief` | Daily briefing: calendar + waiting-on-you + prepared items — §40. |
+| `python -m jarvis.main tasks` | Show what's waiting on you + upcoming reminders — §30, §38. |
 | `python -m jarvis.main bench [N]` | Benchmark time-to-first-word over N turns (§18 latency metric). |
 | `python -m jarvis.main set-model gpt-4o` | Set the main brain model (e.g. `gpt-4o`, `gpt-4o-mini`). |
 | `python -m jarvis.main set-model` | Show the current brain model. |
@@ -198,6 +202,45 @@ python -m pytest -q                              # full suite (139 tests)
 python -m pytest tests/test_adapter_conformance.py -v   # brain-swap contract (§1)
 python -m jarvis.main bench 12                    # time-to-first-word median/p95 vs 1.5s (§18)
 ```
+
+---
+
+## Phase 2 — Agents & Actions (this build)
+
+Jarvis goes from *talking* to *doing*. Every action runs through the Phase 0 safety gates.
+
+| Module | Purpose | Spec |
+|---|---|---|
+| `jarvis/tools/` | Tools = typed callables; execution is approval-gated (irreversible → ask). | §11, §2A.6 |
+| `jarvis/agents/` | M1 direct / M2 single ReAct agent / M3 supervisor + dynamic sub-agents + critic; checkpointed state + interrupts. | §2A, §7 |
+| `jarvis/tasks/` | Durable SQLite job queue + worker; survives restarts; blocked jobs skipped so others run. | §9 |
+| `jarvis/journal/` | Decision journal (what + why + confidence) and staging store (promote/discard speculative work). | §26 |
+| `jarvis/handoff/` | Presence-aware blocked-task handoff; Telegram notifier (free) + stub. | §21, §30, §10 |
+| `jarvis/connectors/` | Local calendar/reminders (§38), email connector with **gated send** (§39), daily briefing (§40). |
+
+**Telegram (optional, free):** store `telegram_bot_token` and `telegram_chat_id` in the vault
+(via `--onboard`) to get phone notifications when you're away from the PC.
+
+### Proactive speaker — Jarvis talks first (§25)
+
+In `voice` mode, Jarvis speaks up on its own when something's worth it — a due reminder, a
+finished task, a blocker, or a scheduled briefing — **without you waking it**. It routes by
+presence:
+
+- **You're at the Mac** → it speaks aloud, then opens a reply window (no wake word needed).
+- **You're away** (idle) → it stays silent and sends the update to your **phone (Telegram)**.
+- **Quiet hours** (config `quiet_hours`, e.g. `22:00-07:00`) → it stays silent.
+
+```bash
+JARVIS_BRIEF_HOUR=8 python -m jarvis.main voice   # also give a spoken briefing at 8am
+```
+
+Try it: `python -m jarvis.main remind "test | +1m"` then run `voice` — a minute later Jarvis
+says it out loud (or texts you if you've stepped away).
+
+**Honest scope:** the agent framework implements the LangGraph *pattern* natively over the
+model-agnostic adapter (dependency-light, testable). Real Gmail/Telegram/browser actions plug
+into the same connector interfaces with your accounts/tokens. See `PHASE2_PLAN.md`.
 
 ---
 

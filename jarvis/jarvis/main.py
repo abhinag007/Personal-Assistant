@@ -217,6 +217,23 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         import os
         debug = os.environ.get("JARVIS_VOICE_DEBUG", "1") != "0"
         wake_mode = os.environ.get("JARVIS_WAKE_MODE", "stt")  # "stt" (robust) or "model"
+
+        # Proactive speaker (§25): Jarvis speaks first (reminders/tasks/briefing), routing to
+        # your phone when you're away. Built from the Phase 2 runtime.
+        proactive = None
+        try:
+            rt, _ = _runtime(config_dir, cfg)
+            from .proactive import ProactiveEngine
+            brief_hour = os.environ.get("JARVIS_BRIEF_HOUR")
+            proactive = ProactiveEngine(
+                calendar=rt.calendar, handoff=rt.handoff,
+                notifier=rt.handoff.notifier, presence=rt.handoff.presence,
+                quiet_hours=cfg.quiet_hours,
+                briefing_hour=int(brief_hour) if (brief_hour and brief_hour.isdigit()) else None,
+                adapter=adapter, user_name=brain.user_name,   # conversational phrasing (§34)
+            )
+        except Exception as e:
+            print(f"[Jarvis] proactive speaker disabled: {e}")
         addressing = os.environ.get("JARVIS_ADDRESSING", "1") == "1"  # smart "talking to me?" (on)
 
         # Use a capable, dedicated model for the addressing yes/no (independent of the brain
@@ -233,7 +250,8 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         loop = LiveVoiceLoop(brain, wake, stt, tts, speaker,
                              require_owner=require_owner, wake_mode=wake_mode,
                              use_addressing_model=addressing,
-                             addressing_adapter=addressing_adapter, debug=debug)
+                             addressing_adapter=addressing_adapter,
+                             proactive=proactive, debug=debug)
         print(f"[Jarvis] Real voice loop. Brain: {adapter.name} | addressing: {addressing_adapter.name}"
               f"{' (on)' if addressing else ' (off)'}")
         print("[Jarvis] Loading models (first run downloads them)...")
@@ -306,6 +324,80 @@ def _voice_test(which: str | None):
         print("Usage: python -m jarvis.main voice-test [tts|stt|mic]")
 
 
+def _runtime(config_dir: Path, cfg):
+    """Build the Phase 2 runtime (agents/tools/calendar/handoff) around the brain."""
+    from .runtime import Runtime
+    from .vault import Vault, KeyringKeyProvider
+
+    brain, adapter, provider, _ = _build_brain(config_dir, cfg)
+    vault = None
+    try:
+        vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
+    except Exception:
+        pass
+    return Runtime(adapter, config_dir, vault=vault), adapter
+
+
+def _agent(config_dir: Path, goal: str | None):
+    """Run a task through the agent stack (§6, §7, §2A)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    if not goal:
+        print('Usage: python -m jarvis.main agent "your task or question"'); return
+    rt, adapter = _runtime(config_dir, cfg)
+    from .agents import route_mode
+    print(f"[Jarvis] mode: {route_mode(goal).value} | brain: {adapter.name}")
+    print("[Jarvis] " + rt.handle(goal))
+
+
+def _remind(config_dir: Path, arg: str | None):
+    """Add a reminder. Format:  'text | +30m'  (or +2h, +1d)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    if not arg or "|" not in arg:
+        print('Usage: python -m jarvis.main remind "call mom | +30m"'); return
+    import time as _t
+    text, when = [s.strip() for s in arg.split("|", 1)]
+    mult = {"m": 60, "h": 3600, "d": 86400}.get(when[-1], 60)
+    try:
+        minutes = float(when.lstrip("+")[:-1]) * mult / 60
+    except ValueError:
+        print("Couldn't parse the time (use +30m / +2h / +1d)."); return
+    rt, _ = _runtime(config_dir, cfg)
+    due = _t.time() + minutes * 60
+    rid = rt.calendar.add(text, due)
+    print(f"[Jarvis] Reminder set: '{text}' at {_t.strftime('%a %H:%M', _t.localtime(due))} (id {rid})")
+
+
+def _brief(config_dir: Path):
+    """Print the daily briefing (§40)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    from .connectors import build_briefing
+    rt, _ = _runtime(config_dir, cfg)
+    print(build_briefing(calendar=rt.calendar, handoff=rt.handoff, staging=rt.staging))
+
+
+def _tasks(config_dir: Path):
+    """Show what's waiting on you + upcoming reminders (§30, §38)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    rt, _ = _runtime(config_dir, cfg)
+    waiting = rt.handoff.waiting()
+    print(f"[Jarvis] Waiting on you: {len(waiting)}")
+    for t in waiting:
+        print(f"  • {t.reason} (id {t.id})")
+    ups = rt.calendar.upcoming()
+    print(f"[Jarvis] Upcoming reminders: {len(ups)}")
+    import time as _t
+    for r in ups:
+        print(f"  • {_t.strftime('%a %H:%M', _t.localtime(r.due))} — {r.text}")
+
+
 def _bench(config_dir: Path, n_arg: str | None):
     """Benchmark time-to-first-word (§18)."""
     cfg = Config.load(config_dir)
@@ -352,6 +444,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JARVIS")
     parser.add_argument("command", nargs="?", default="demo",
                         choices=["demo", "chat", "voice", "voice-enroll", "voice-test",
+                                 "agent", "remind", "brief", "tasks",
                                  "bench", "backup", "set-model"],
                         help="what to run (default: demo)")
     parser.add_argument("arg", nargs="?", default=None, help="argument for the command")
@@ -373,6 +466,14 @@ def main(argv: list[str] | None = None) -> None:
         _voice_enroll(config_dir)
     elif args.command == "voice-test":
         _voice_test(args.arg)
+    elif args.command == "agent":
+        _agent(config_dir, args.arg)
+    elif args.command == "remind":
+        _remind(config_dir, args.arg)
+    elif args.command == "brief":
+        _brief(config_dir)
+    elif args.command == "tasks":
+        _tasks(config_dir)
     elif args.command == "bench":
         _bench(config_dir, args.arg)
     elif args.command == "backup":

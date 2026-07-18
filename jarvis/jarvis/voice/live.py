@@ -42,6 +42,8 @@ class LiveVoiceLoop:
         addressing_adapter=None,            # a capable model for that call (defaults to brain's)
         wake_mode: str = "stt",          # "stt" (robust, reuses Whisper) or "model" (openWakeWord)
         wake_words: tuple = ("jarvis",),
+        proactive=None,                  # ProactiveEngine — lets Jarvis speak first (§25)
+        proactive_interval: float = 5.0, # seconds between proactive checks while idle
         debug: bool = False,
         log=print,
     ):
@@ -59,6 +61,8 @@ class LiveVoiceLoop:
         self.use_addressing_model = use_addressing_model
         self.wake_mode = wake_mode
         self.wake_words = tuple(w.lower() for w in wake_words)
+        self.proactive = proactive
+        self.proactive_interval = proactive_interval
         self.debug = debug
         self.log = log
         self._speech_threshold = 500.0  # replaced by calibration
@@ -102,12 +106,34 @@ class LiveVoiceLoop:
         last_addressed = time.monotonic()
         peak = 0.0
         dbg_frames = 0
+        last_proactive = time.monotonic()
 
         while True:
             frame = mic.read()
 
-            # ---- IDLE: wait for the wake word --------------------------------
+            # ---- IDLE: proactive check, then wait for the wake word ----------
             if state == "IDLE":
+                # Jarvis speaks first when something's worth it (§25). Presence routing
+                # (speak vs. phone) is handled inside the engine.
+                if self.proactive is not None and \
+                        (time.monotonic() - last_proactive) >= self.proactive_interval:
+                    last_proactive = time.monotonic()
+                    try:
+                        announcements = self.proactive.poll()
+                    except Exception as e:
+                        announcements = []
+                        if self.debug:
+                            self.log(f"[proactive] error: {e}")
+                    if announcements:
+                        for text in announcements:
+                            self.log(f"[jarvis→you] {text}")
+                            self.tts.speak(text)
+                        mic.drain()
+                        state = "ACTIVE"           # open a reply window — no wake word needed
+                        segmenter.reset()
+                        last_addressed = time.monotonic()
+                        continue
+
                 woke = False
                 if self.wake_mode == "model":
                     woke = self._idle_model_wake(frame, mic)
