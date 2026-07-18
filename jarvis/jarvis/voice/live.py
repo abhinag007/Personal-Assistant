@@ -1,0 +1,228 @@
+"""LiveVoiceLoop (§3, §4, §5, §18, §19) — the real always-on Jarvis voice interaction.
+
+Interaction model (what the user asked for):
+  * The mic is ALWAYS on, listening only for the wake word while idle.
+  * "Hey Jarvis" ARMS a conversation session — it does not need to be repeated. Jarvis then
+    keeps listening continuously.
+  * For each utterance in a session: verify it's the owner (ignore other people), transcribe,
+    and decide whether it was addressed to Jarvis (vs. talking to a person / phone / self).
+    Reply only when addressed; otherwise just keep listening.
+  * The session ends when there's no addressed speech for a while (conversation over / user
+    walked away), returning to idle — where the wake word is needed again.
+
+State machine:  IDLE --(wake word)--> ACTIVE --(inactivity timeout)--> IDLE
+
+This module owns the mic and orchestrates the backends. Heavy audio deps are imported lazily
+via the backend classes, so importing this module is cheap.
+"""
+from __future__ import annotations
+
+import time
+from typing import Optional
+
+from ..brain.loop import BrainLoop
+from .activity import UtteranceSegmenter, frame_is_speech, frame_rms, split_on_wake
+from .addressing import is_addressed
+
+
+class LiveVoiceLoop:
+    def __init__(
+        self,
+        brain: BrainLoop,
+        wake,            # OpenWakeWord
+        stt,             # FasterWhisperSTT
+        tts,             # KokoroTTS
+        speaker=None,    # SpeechBrainVerifier or None (no owner check)
+        *,
+        session_timeout: float = 30.0,       # seconds of no speech → end session
+        vad_multiplier: float = 2.5,         # speech threshold = ambient_rms * this
+        end_silence_frames: int = 16,        # ~1.3 s pause ends an utterance (don't chop sentences)
+        require_owner: bool = True,
+        use_addressing_model: bool = True,  # decide "is he talking to me?" (§3)
+        addressing_adapter=None,            # a capable model for that call (defaults to brain's)
+        wake_mode: str = "stt",          # "stt" (robust, reuses Whisper) or "model" (openWakeWord)
+        wake_words: tuple = ("jarvis",),
+        debug: bool = False,
+        log=print,
+    ):
+        self.brain = brain
+        self.wake = wake
+        self.stt = stt
+        self.tts = tts
+        self.speaker = speaker
+        # A dedicated (stronger) model for the addressing yes/no; falls back to the brain's.
+        self.addressing_adapter = addressing_adapter or brain.adapter
+        self.session_timeout = session_timeout
+        self.vad_multiplier = vad_multiplier
+        self.end_silence_frames = end_silence_frames
+        self.require_owner = require_owner and speaker is not None
+        self.use_addressing_model = use_addressing_model
+        self.wake_mode = wake_mode
+        self.wake_words = tuple(w.lower() for w in wake_words)
+        self.debug = debug
+        self.log = log
+        self._speech_threshold = 500.0  # replaced by calibration
+
+    # ---- calibration -----------------------------------------------------
+
+    def warmup(self) -> None:
+        """Load all models up front so nothing stalls the loop mid-conversation."""
+        backends = [("stt", self.stt), ("tts", self.tts), ("speaker", self.speaker)]
+        if self.wake_mode == "model":
+            backends.insert(0, ("wake", self.wake))  # only load openWakeWord if actually used
+        for name, backend in backends:
+            if backend is not None and hasattr(backend, "load"):
+                self.log(f"[voice] loading {name} model...")
+                try:
+                    backend.load()
+                except Exception as e:
+                    self.log(f"[voice] {name} load warning: {e}")
+
+    def calibrate(self, mic, seconds: float = 1.0) -> None:
+        """Sample ambient noise to set the speech threshold."""
+        n = max(1, int(seconds / 0.08))  # ~80 ms frames
+        readings = [frame_rms(mic.read()) for _ in range(n)]
+        ambient = sum(readings) / len(readings) if readings else 100.0
+        self._speech_threshold = max(150.0, ambient * self.vad_multiplier)
+        self.log(f"[voice] calibrated ambient≈{ambient:.0f}, speech threshold≈{self._speech_threshold:.0f}")
+
+    # ---- main loop -------------------------------------------------------
+
+    def run(self, mic) -> None:
+        """Consume mic frames forever, running the IDLE↔ACTIVE state machine.
+
+        `mic` must provide read() -> frame bytes and drain() -> discard buffered frames.
+        """
+        self.warmup()
+        mic.drain()  # discard anything captured during model loading
+        self.calibrate(mic)
+        self.log(f'[voice] Idle. Say "Hey Jarvis" to start. (wake mode: {self.wake_mode}, Ctrl-C to quit)')
+        state = "IDLE"
+        segmenter = UtteranceSegmenter(end_silence_frames=self.end_silence_frames)
+        last_addressed = time.monotonic()
+        peak = 0.0
+        dbg_frames = 0
+
+        while True:
+            frame = mic.read()
+
+            # ---- IDLE: wait for the wake word --------------------------------
+            if state == "IDLE":
+                woke = False
+                if self.wake_mode == "model":
+                    woke = self._idle_model_wake(frame, mic)
+                else:
+                    # STT wake: segment speech, transcribe, look for "jarvis".
+                    is_speech = frame_is_speech(frame, self._speech_threshold)
+                    utterance = segmenter.feed(is_speech, frame)
+                    if utterance is not None:
+                        woke = self._idle_stt_wake(b"".join(utterance), mic)
+                        segmenter.reset()
+                if woke:
+                    state = "ACTIVE"
+                    segmenter.reset()
+                    last_addressed = time.monotonic()
+                continue
+
+            # ---- ACTIVE: converse until silence times out --------------------
+            now = time.monotonic()
+            is_speech = frame_is_speech(frame, self._speech_threshold)
+            was_active = segmenter.active
+            utterance = segmenter.feed(is_speech, frame)
+            if self.debug:
+                if is_speech and not was_active:
+                    self.log(f"[voice] hearing you... (rms>{self._speech_threshold:.0f})")
+                dbg_frames += 1
+                if dbg_frames >= 25:  # ~2 s heartbeat so it never looks dead
+                    self.log(f"[voice] listening... ({int(now - last_addressed)}s/"
+                             f"{int(self.session_timeout)}s to idle)")
+                    dbg_frames = 0
+
+            if utterance is not None:
+                text = self._transcribe(b"".join(utterance))
+                if text:
+                    self.log(f"[you] {text}")
+                    if self._respond(text):
+                        last_addressed = time.monotonic()
+                mic.drain()  # discard audio captured while transcribing/replying (incl. TTS)
+
+            if (now - last_addressed) > self.session_timeout:
+                self.log("[voice] No conversation for a while — going idle.")
+                state = "IDLE"
+                segmenter.reset()
+
+    # ---- wake helpers ----------------------------------------------------
+
+    def _idle_model_wake(self, frame: bytes, mic) -> bool:
+        """openWakeWord path (kept as an option). Returns True on wake."""
+        try:
+            score = self.wake.predict(frame)
+            if score >= self.wake.threshold:
+                self.log(f"[voice] Wake word ({score:.2f}) — I'm listening.")
+                self.tts.speak("Yes?")
+                mic.drain()
+                return True
+        except Exception as e:
+            self.log(f"[voice] wake error: {e}")
+        return False
+
+    def _idle_stt_wake(self, pcm: bytes, mic) -> bool:
+        """STT wake: transcribe the utterance; wake if it contains the wake word.
+
+        Reuses Whisper (which reliably hears 'Hey Jarvis'). If there's a command after the
+        wake word ('Hey Jarvis, what's the time'), it's handled immediately.
+        """
+        text = self._transcribe(pcm, check_owner=False)
+        if not text:
+            return False
+        # Fuzzy match so STT slips (Jervis / Jaarvis / Jarvish) still wake it.
+        matched, command = split_on_wake(text, self.wake_words)
+        if not matched:
+            if self.debug:
+                self.log(f"[voice] (idle heard: {text!r} — no wake word)")
+            return False
+        self.log(f"[voice] Wake word heard: {text!r} — I'm listening.")
+        mic.drain()
+        if command.strip():
+            self._respond(command)  # handle the inline command right away
+        else:
+            self.tts.speak("Yes?")
+        return True
+
+    # ---- transcription + reply (shared by idle-wake and active) ----------
+
+    def _transcribe(self, pcm: bytes, *, check_owner: bool = True) -> str:
+        """Owner check (optional) + speech-to-text. Returns text ('' if nothing/other person)."""
+        if self.debug:
+            self.log(f"[voice] captured {len(pcm) / 2 / 16000:.1f}s of audio — transcribing...")
+        if check_owner and self.require_owner:
+            try:
+                if not self.speaker.is_owner(pcm):
+                    return ""  # someone else spoke
+            except Exception as e:
+                self.log(f"[voice] speaker check error: {e}")
+        try:
+            text = self.stt.transcribe(pcm)
+        except Exception as e:
+            self.log(f"[voice] transcription error: {e}")
+            return ""
+        if not text or not text.strip():
+            if self.debug:
+                self.log("[voice] (didn't catch any words)")
+            return ""
+        return text.strip()
+
+    def _respond(self, text: str) -> bool:
+        """Kill-switch + addressing check, then reply. Returns True if Jarvis replied."""
+        if self.brain.kill_switch and self.brain.kill_switch.check(text):
+            return False
+        if not is_addressed(self.addressing_adapter, text, use_model=self.use_addressing_model):
+            self.log("[voice] (not addressed to me — listening)")
+            return False
+        from .pipeline import _SentenceSpeaker
+
+        sink = _SentenceSpeaker(self.tts)
+        reply = self.brain.handle_turn(text, speak=sink.feed)
+        sink.flush()
+        self.log(f"[jarvis] {reply}")
+        return True

@@ -1,0 +1,15 @@
+# JARVIS — Phase 1 VOICE dependencies (install when running voice mode on the Mac).
+# These are heavier and platform-specific; the core assistant runs without them
+# (text/chat mode uses stubs). Install with: pip install -r requirements-voice.txt
+
+openai>=1.40                 # OpenAI brain (dev phase, §1)
+openwakeword>=0.6            # wake word "Hey Jarvis" (§3)
+faster-whisper>=1.0          # local STT (§4) — CUDA/Metal
+speechbrain>=1.0             # speaker verification ECAPA-TDNN (§3)
+kokoro>=0.9                  # local TTS voice (§5)
+sounddevice>=0.4            # mic capture + audio playback
+numpy>=1.26                  # audio buffers
+
+# Optional / alternatives:
+# piper-tts                  # ultra-light CPU TTS fallback (§5)
+# langsmith                  # tracing during the OpenAI dev phase (§2A.5)
