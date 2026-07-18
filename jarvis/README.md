@@ -186,6 +186,17 @@ python -m jarvis.main voice
 
 # Cheapest / fastest:
 JARVIS_ADDRESSING=0 JARVIS_STT_MODEL=small.en python -m jarvis.main voice
+
+# Quiet logs (once everything's stable):
+JARVIS_VOICE_DEBUG=0 python -m jarvis.main voice
+```
+
+### Benchmark & verify (Phase 1 completeness)
+
+```bash
+python -m pytest -q                              # full suite (139 tests)
+python -m pytest tests/test_adapter_conformance.py -v   # brain-swap contract (§1)
+python -m jarvis.main bench 12                    # time-to-first-word median/p95 vs 1.5s (§18)
 ```
 
 ---
