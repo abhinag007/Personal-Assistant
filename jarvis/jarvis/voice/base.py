@@ -46,8 +46,8 @@ class TTS(ABC):
     """§5 — text to speech."""
 
     @abstractmethod
-    def speak(self, text: str) -> None:
-        """Synthesize and play the text."""
+    def speak(self, text: str, stop_check=None) -> None:
+        """Synthesize and play the text. If stop_check() becomes True, stop early (barge-in)."""
 
     def speak_stream(self, chunks: Iterator[str]) -> None:
         """Speak streamed text chunks, sentence by sentence (low latency, §18).

@@ -155,9 +155,10 @@ def _chat(config_dir: Path):
         sys.exit(1)
 
     brain, adapter, provider, _ = _build_brain(config_dir, cfg)
-    print(f"[Jarvis] Phase 1 chat online. Brain: {adapter.name}"
+    rt, _ = _runtime(config_dir, cfg, brain=brain, adapter=adapter)
+    print(f"[Jarvis] Chat online (agents enabled). Brain: {adapter.name}"
           + ("  (offline mock — store an 'openai_api_key' to use OpenAI)" if provider == "mock" else ""))
-    print('[Jarvis] Talk to me. Ctrl-C or "Jarvis, end yourself" to stop.\n')
+    print('[Jarvis] Talk to me — I can chat AND do tasks. Ctrl-C or "Jarvis, end yourself" to stop.\n')
 
     while True:
         try:
@@ -168,10 +169,8 @@ def _chat(config_dir: Path):
         if not text:
             continue
         print("Jarvis> ", end="", flush=True)
-        brain.handle_turn(text)
-        print()
-        if brain.last_ttfw is not None:
-            print(f"   (ttfw {brain.last_ttfw * 1000:.0f} ms)\n")
+        rt.handle(text, speak=lambda c: print(c, end="", flush=True))
+        print("\n")
 
 
 def _voice(config_dir: Path, *, force_stub: bool = False):
@@ -201,39 +200,42 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         speaker = SpeechBrainVerifier(threshold=spk_threshold)
         vp = load_voiceprint(config_dir)
         owner_env_on = _os.environ.get("JARVIS_REQUIRE_OWNER", "1") != "0"
-        if vp is not None and owner_env_on:
+        # ALWAYS load the voiceprint if it exists — barge-in uses it to tell your voice from
+        # Jarvis's own (so speakers don't self-interrupt), even when owner-only responding is off.
+        if vp is not None:
             speaker.set_enrolled_vector(vp)
-            require_owner = True
+        require_owner = bool(vp is not None and owner_env_on)
+        if require_owner:
             print(f"[Jarvis] Owner-only voice ON (match ≥ {spk_threshold}). "
                   f"Set JARVIS_REQUIRE_OWNER=0 to disable, or JARVIS_SPEAKER_THRESHOLD to tune.")
+        elif vp is None:
+            print("[Jarvis] No voiceprint enrolled — I'll respond to any voice.")
+            print("         Run 'python -m jarvis.main voice-enroll' (also fixes speaker barge-in).")
         else:
-            require_owner = False
-            if vp is None:
-                print("[Jarvis] No voiceprint enrolled — I'll respond to any voice.")
-                print("         Run 'python -m jarvis.main voice-enroll' to make me owner-only.")
-            else:
-                print("[Jarvis] Owner-only disabled via JARVIS_REQUIRE_OWNER=0.")
+            print("[Jarvis] Owner-only responding is off, but your voiceprint is loaded for barge-in.")
 
         import os
         debug = os.environ.get("JARVIS_VOICE_DEBUG", "1") != "0"
         wake_mode = os.environ.get("JARVIS_WAKE_MODE", "stt")  # "stt" (robust) or "model"
 
-        # Proactive speaker (§25): Jarvis speaks first (reminders/tasks/briefing), routing to
-        # your phone when you're away. Built from the Phase 2 runtime.
+        # One runtime (agents + tools + calendar/handoff), sharing THIS voice brain, so
+        # spoken commands actually do things and proactive uses the same state.
+        runtime = None
         proactive = None
         try:
-            rt, _ = _runtime(config_dir, cfg)
+            runtime, _ = _runtime(config_dir, cfg, brain=brain, adapter=adapter, background=True)
+            runtime.start_background()   # worker thread for multitasking (§9)
             from .proactive import ProactiveEngine
             brief_hour = os.environ.get("JARVIS_BRIEF_HOUR")
             proactive = ProactiveEngine(
-                calendar=rt.calendar, handoff=rt.handoff,
-                notifier=rt.handoff.notifier, presence=rt.handoff.presence,
+                calendar=runtime.calendar, handoff=runtime.handoff, queue=runtime.task_queue,
+                notifier=runtime.handoff.notifier, presence=runtime.handoff.presence,
                 quiet_hours=cfg.quiet_hours,
                 briefing_hour=int(brief_hour) if (brief_hour and brief_hour.isdigit()) else None,
                 adapter=adapter, user_name=brain.user_name,   # conversational phrasing (§34)
             )
         except Exception as e:
-            print(f"[Jarvis] proactive speaker disabled: {e}")
+            print(f"[Jarvis] agent runtime / proactive disabled: {e}")
         addressing = os.environ.get("JARVIS_ADDRESSING", "1") == "1"  # smart "talking to me?" (on)
 
         # Use a capable, dedicated model for the addressing yes/no (independent of the brain
@@ -251,7 +253,7 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
                              require_owner=require_owner, wake_mode=wake_mode,
                              use_addressing_model=addressing,
                              addressing_adapter=addressing_adapter,
-                             proactive=proactive, debug=debug)
+                             proactive=proactive, runtime=runtime, debug=debug)
         print(f"[Jarvis] Real voice loop. Brain: {adapter.name} | addressing: {addressing_adapter.name}"
               f"{' (on)' if addressing else ' (off)'}")
         print("[Jarvis] Loading models (first run downloads them)...")
@@ -324,18 +326,19 @@ def _voice_test(which: str | None):
         print("Usage: python -m jarvis.main voice-test [tts|stt|mic]")
 
 
-def _runtime(config_dir: Path, cfg):
+def _runtime(config_dir: Path, cfg, *, brain=None, adapter=None, background=False):
     """Build the Phase 2 runtime (agents/tools/calendar/handoff) around the brain."""
     from .runtime import Runtime
     from .vault import Vault, KeyringKeyProvider
 
-    brain, adapter, provider, _ = _build_brain(config_dir, cfg)
+    if brain is None or adapter is None:
+        brain, adapter, provider, _ = _build_brain(config_dir, cfg)
     vault = None
     try:
         vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
     except Exception:
         pass
-    return Runtime(adapter, config_dir, vault=vault), adapter
+    return Runtime(adapter, config_dir, vault=vault, brain=brain, background=background), adapter
 
 
 def _agent(config_dir: Path, goal: str | None):
@@ -348,7 +351,9 @@ def _agent(config_dir: Path, goal: str | None):
     rt, adapter = _runtime(config_dir, cfg)
     from .agents import route_mode
     print(f"[Jarvis] mode: {route_mode(goal).value} | brain: {adapter.name}")
-    print("[Jarvis] " + rt.handle(goal))
+    print("[Jarvis] ", end="", flush=True)
+    rt.handle(goal, speak=lambda c: print(c, end="", flush=True))
+    print()
 
 
 def _remind(config_dir: Path, arg: str | None):
@@ -398,6 +403,92 @@ def _tasks(config_dir: Path):
         print(f"  • {_t.strftime('%a %H:%M', _t.localtime(r.due))} — {r.text}")
 
 
+def _telegram_chatid(config_dir: Path):
+    """Fetch your Telegram chat id from the bot's recent updates (§10).
+
+    Prereq: message your bot once (any text) so it has a chat to report.
+    """
+    import json as _json
+    import urllib.request
+    from .vault import Vault, KeyringKeyProvider
+
+    try:
+        token = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider()).get_secret("telegram_bot_token")
+    except Exception:
+        token = None
+    if not token:
+        print("[Jarvis] No telegram_bot_token stored. Run: python -m jarvis.main --onboard")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = _json.loads(r.read().decode())
+    except Exception as e:
+        print(f"[Jarvis] Couldn't reach Telegram: {e}")
+        return
+
+    if not data.get("ok"):
+        print(f"[Jarvis] Telegram error: {data}")
+        return
+    chats = {}
+    for upd in data.get("result", []):
+        msg = upd.get("message") or upd.get("edited_message") or {}
+        chat = msg.get("chat") or {}
+        if chat.get("id") is not None:
+            who = chat.get("username") or chat.get("first_name") or chat.get("title") or "?"
+            chats[chat["id"]] = who
+    if not chats:
+        print("[Jarvis] No messages found. Send your bot a message first, then re-run this.")
+        return
+    print("[Jarvis] Found chat id(s):")
+    for cid, who in chats.items():
+        print(f"  • {cid}  ({who})")
+    print("\nStore it with:  python -m jarvis.main --onboard   (Telegram chat id prompt)")
+
+
+def _hitl(action: str | None):
+    """Interactive demo of LangGraph human-in-the-loop: pause → you answer → resume (§11)."""
+    action = action or "send $500 to Bob"
+    try:
+        from .agents.hitl import build_approval_graph
+        from langgraph.types import Command
+    except Exception as e:
+        print(f"[Jarvis] needs langgraph: pip install langgraph ({e})")
+        return
+    import uuid
+    app = build_approval_graph()
+    cfg = {"configurable": {"thread_id": uuid.uuid4().hex[:8]}}
+
+    print(f"[Jarvis] Agent wants to do: {action!r}")
+    res = app.invoke({"action": action, "approved": None, "result": None}, cfg)
+    intr = res.get("__interrupt__")
+    if not intr:
+        print("[Jarvis] (no interrupt — already finished)")
+        return
+    # The graph is PAUSED here, state persisted. Nothing has executed.
+    print(f"[Jarvis] ⏸  Paused for you: {intr[0].value.get('question')}")
+    ans = input("  Approve? (yes/no): ").strip().lower()
+    # Resume from exactly the pause point — not a re-run.
+    final = app.invoke(Command(resume=(ans in ("y", "yes"))), cfg)
+    print(f"[Jarvis] ▶  Resumed → {final['result']}")
+
+
+def _search(config_dir: Path, query: str | None):
+    """Run a web search directly and report which backend served it (§6)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    if not query:
+        print('Usage: python -m jarvis.main search "your query"'); return
+    rt, _ = _runtime(config_dir, cfg)
+    has_tavily = bool(rt.tavily_key)
+    print(f"[Jarvis] Tavily key stored: {has_tavily}. Searching...")
+    res = rt._websearch.search(query, 5)
+    print(res.output if res.ok else f"[error] {res.error}")
+    print(f"\n[Jarvis] Served by: {rt._websearch.last_source or 'n/a'}")
+
+
 def _bench(config_dir: Path, n_arg: str | None):
     """Benchmark time-to-first-word (§18)."""
     cfg = Config.load(config_dir)
@@ -444,8 +535,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JARVIS")
     parser.add_argument("command", nargs="?", default="demo",
                         choices=["demo", "chat", "voice", "voice-enroll", "voice-test",
-                                 "agent", "remind", "brief", "tasks",
-                                 "bench", "backup", "set-model"],
+                                 "agent", "remind", "brief", "tasks", "telegram-chatid",
+                                 "search", "hitl", "bench", "backup", "set-model"],
                         help="what to run (default: demo)")
     parser.add_argument("arg", nargs="?", default=None, help="argument for the command")
     parser.add_argument("--onboard", action="store_true", help="run first-run setup")
@@ -474,6 +565,12 @@ def main(argv: list[str] | None = None) -> None:
         _brief(config_dir)
     elif args.command == "tasks":
         _tasks(config_dir)
+    elif args.command == "telegram-chatid":
+        _telegram_chatid(config_dir)
+    elif args.command == "search":
+        _search(config_dir, args.arg)
+    elif args.command == "hitl":
+        _hitl(args.arg)
     elif args.command == "bench":
         _bench(config_dir, args.arg)
     elif args.command == "backup":

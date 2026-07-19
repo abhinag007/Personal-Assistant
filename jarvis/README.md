@@ -217,6 +217,18 @@ Jarvis goes from *talking* to *doing*. Every action runs through the Phase 0 saf
 | `jarvis/journal/` | Decision journal (what + why + confidence) and staging store (promote/discard speculative work). | §26 |
 | `jarvis/handoff/` | Presence-aware blocked-task handoff; Telegram notifier (free) + stub. | §21, §30, §10 |
 | `jarvis/connectors/` | Local calendar/reminders (§38), email connector with **gated send** (§39), daily briefing (§40). |
+| `jarvis/tools/web.py` | **Web search** (DuckDuckGo, free) + **web fetch** (read a page) — agents do real research. | §6, §12 |
+| `jarvis/connectors/browser.py` | **Browser** (Playwright) for JS-heavy pages; captcha/login → handoff (§30). | §6 |
+
+**macOS control (§28):** agents can `open_app` (Chrome, VS Code, Notes…), `open_path` (files/
+folders), `open_url`, and `browser_search` — all reversible, run freely. **Terminal access**
+(`run_command`) is DANGEROUS: it's **opt-in** (`JARVIS_ALLOW_SHELL=1`) and every command is
+approval-gated. Examples: "open Chrome", "search the web for X", "open my notes on the Desktop",
+"open VS Code".
+
+**Web tools:** `web_search` and `web_fetch` work out of the box (`ddgs` is in requirements).
+The `browse` tool needs Playwright: `pip install playwright && playwright install chromium`.
+Now `agent "research X and summarise"` actually searches the web instead of answering from memory.
 
 **Telegram (optional, free):** store `telegram_bot_token` and `telegram_chat_id` in the vault
 (via `--onboard`) to get phone notifications when you're away from the PC.
@@ -238,9 +250,21 @@ JARVIS_BRIEF_HOUR=8 python -m jarvis.main voice   # also give a spoken briefing 
 Try it: `python -m jarvis.main remind "test | +1m"` then run `voice` — a minute later Jarvis
 says it out loud (or texts you if you've stepped away).
 
-**Honest scope:** the agent framework implements the LangGraph *pattern* natively over the
-model-agnostic adapter (dependency-light, testable). Real Gmail/Telegram/browser actions plug
-into the same connector interfaces with your accounts/tokens. See `PHASE2_PLAN.md`.
+**LangGraph:** the M3 supervisor runs as a real LangGraph `StateGraph` (checkpointed,
+resumable) when `langgraph` is installed, with automatic fallback to the native orchestrator
+otherwise. `jarvis/agents/hitl.py` shows durable **human-in-the-loop** pause/resume via
+`interrupt()` + `Command(resume=...)`. Toggle with `JARVIS_USE_LANGGRAPH=0`.
+
+**Voice does things:** spoken/typed requests route through `Runtime.handle()` — M1 chat via the
+brain (memory), M2/M3 via agents + tools — so "Jarvis, remind me to call mom" actually creates
+the reminder. Real Gmail/browser actions plug into the same connector interfaces. See `PHASE2_PLAN.md`.
+
+**Multitasking:** long (M3) tasks run in a background worker thread — Jarvis says "On it" and
+you keep talking; it announces the result when done (speak if you're here, phone if away).
+
+**Barge-in:** you can interrupt Jarvis mid-sentence — start talking and it stops speaking and
+listens. (On by default; needs headphones or a bit of threshold tuning to avoid it hearing its
+own voice. Toggle off by constructing the voice loop with `barge_in=False`.)
 
 ---
 

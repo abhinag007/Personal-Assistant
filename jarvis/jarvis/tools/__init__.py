@@ -5,3 +5,4 @@ executes them through the Phase 0 approval engine, so an irreversible tool (send
 delete-outside-sandbox) is gated on human approval before it runs.
 """
 from .base import Tool, ToolRegistry, ToolResult  # noqa: F401
+from .web import WebSearch, web_fetch, html_to_text, make_tavily_backend  # noqa: F401

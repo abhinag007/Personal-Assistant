@@ -56,7 +56,9 @@ class StubTTS(TTS):
         self.spoken: list[str] = []
         self._sink = sink
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_check=None) -> None:
+        if stop_check and stop_check():
+            return
         self.spoken.append(text)
         if self._sink:
             self._sink(text)

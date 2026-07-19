@@ -59,6 +59,16 @@ class StagingStore:
             return True
         return False
 
+    def prune(self, older_than_seconds: float, *, now: Optional[float] = None) -> int:
+        """Delete staged items older than the cutoff (keeps scratch from piling up)."""
+        now = now if now is not None else time.time()
+        removed = 0
+        for item in self.list():
+            if (now - item.created) > older_than_seconds:
+                if self.discard(item.id):
+                    removed += 1
+        return removed
+
     def promote(self, item_id: str, promoter) -> bool:
         """Hand the item to a `promoter(StagedItem)` callback, then remove it from staging."""
         item = self.get(item_id)

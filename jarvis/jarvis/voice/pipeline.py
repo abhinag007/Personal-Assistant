@@ -15,13 +15,23 @@ from .base import STT, TTS, SpeakerVerifier, WakeWordDetector
 
 
 class _SentenceSpeaker:
-    """Buffers streamed tokens and speaks each complete sentence as it arrives."""
+    """Buffers streamed tokens and speaks each complete sentence as it arrives.
 
-    def __init__(self, tts: TTS):
+    `stop_check` (barge-in): if it becomes True, stop speaking and drop the rest.
+    """
+
+    def __init__(self, tts: TTS, stop_check=None):
         self._tts = tts
         self._buf = ""
+        self._stop_check = stop_check
+
+    def _stopped(self) -> bool:
+        return bool(self._stop_check and self._stop_check())
 
     def feed(self, chunk: str) -> None:
+        if self._stopped():
+            self._buf = ""
+            return
         self._buf += chunk
         while True:
             idx = next((i for i, c in enumerate(self._buf) if c in ".!?\n"), None)
@@ -29,11 +39,14 @@ class _SentenceSpeaker:
                 break
             sentence, self._buf = self._buf[: idx + 1], self._buf[idx + 1 :]
             if sentence.strip():
-                self._tts.speak(sentence.strip())
+                self._tts.speak(sentence.strip(), stop_check=self._stop_check)
+            if self._stopped():
+                self._buf = ""
+                return
 
     def flush(self) -> None:
-        if self._buf.strip():
-            self._tts.speak(self._buf.strip())
+        if not self._stopped() and self._buf.strip():
+            self._tts.speak(self._buf.strip(), stop_check=self._stop_check)
         self._buf = ""
 
 

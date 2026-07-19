@@ -108,9 +108,12 @@ class Orchestrator:
                                 reasoning=" | ".join(state.plan))
 
         for subtask in state.plan:
-            # Dynamic sub-agent: role written from the sub-task at runtime.
+            # Dynamic sub-agent: role written from the sub-task at runtime. It should use
+            # web tools to research and RETURN its findings as the answer (not stash notes).
             agent = Agent(self.adapter, self.tools,
-                          role=f"a specialist handling: {subtask}")
+                          role=(f"a specialist handling: {subtask}. Use web_search/web_fetch to "
+                                f"find real information if needed, then return your findings as "
+                                f"the final answer — do not save notes"))
             output, ok, critique = self._run_with_review(agent, subtask)
             state.sub_results.append({"subtask": subtask, "output": output,
                                       "accepted": ok, "critique": critique})

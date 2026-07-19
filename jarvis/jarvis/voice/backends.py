@@ -196,7 +196,7 @@ class KokoroTTS(TTS):
     def load(self) -> None:
         self._load()
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_check=None) -> None:
         if not text.strip():
             return
         pipe = self._load()
@@ -204,6 +204,19 @@ class KokoroTTS(TTS):
             import sounddevice as sd
         except ImportError as e:
             raise ImportError(f"sounddevice not installed. {_INSTALL_HINT}") from e
+        import time as _t
         for _, _, audio in pipe(text, voice=self.voice):
+            if stop_check and stop_check():   # barge-in before this chunk
+                return
             sd.play(audio, samplerate=24000)
-            sd.wait()
+            # Poll instead of sd.wait() so we can stop the instant you speak (§18 barge-in).
+            while True:
+                if stop_check and stop_check():
+                    sd.stop()
+                    return
+                try:
+                    if not sd.get_stream().active:
+                        break
+                except Exception:
+                    break
+                _t.sleep(0.03)

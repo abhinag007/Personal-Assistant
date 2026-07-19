@@ -44,6 +44,8 @@ class LiveVoiceLoop:
         wake_words: tuple = ("jarvis",),
         proactive=None,                  # ProactiveEngine — lets Jarvis speak first (§25)
         proactive_interval: float = 5.0, # seconds between proactive checks while idle
+        runtime=None,                    # Runtime — routes spoken requests to agents/tools (§2A)
+        barge_in: bool = True,           # let the user interrupt TTS by speaking (§18)
         debug: bool = False,
         log=print,
     ):
@@ -63,7 +65,11 @@ class LiveVoiceLoop:
         self.wake_words = tuple(w.lower() for w in wake_words)
         self.proactive = proactive
         self.proactive_interval = proactive_interval
+        self.runtime = runtime
+        self.barge_in = barge_in
         self.debug = debug
+        self._mic = None          # set in run(); used by barge-in monitor
+        self._barged = False
         self.log = log
         self._speech_threshold = 500.0  # replaced by calibration
 
@@ -98,6 +104,7 @@ class LiveVoiceLoop:
         `mic` must provide read() -> frame bytes and drain() -> discard buffered frames.
         """
         self.warmup()
+        self._mic = mic
         mic.drain()  # discard anything captured during model loading
         self.calibrate(mic)
         self.log(f'[voice] Idle. Say "Hey Jarvis" to start. (wake mode: {self.wake_mode}, Ctrl-C to quit)')
@@ -170,7 +177,11 @@ class LiveVoiceLoop:
                     self.log(f"[you] {text}")
                     if self._respond(text):
                         last_addressed = time.monotonic()
-                mic.drain()  # discard audio captured while transcribing/replying (incl. TTS)
+                # Normally drain audio captured while transcribing/replying (incl. our TTS).
+                # But if you barged in, KEEP listening so your interruption is captured.
+                if not self._barged:
+                    mic.drain()
+                self._barged = False
 
             if (now - last_addressed) > self.session_timeout:
                 self.log("[voice] No conversation for a while — going idle.")
@@ -254,8 +265,37 @@ class LiveVoiceLoop:
             return False
         from .pipeline import _SentenceSpeaker
 
-        sink = _SentenceSpeaker(self.tts)
-        reply = self.brain.handle_turn(text, speak=sink.feed)
+        # Barge-in: while Jarvis speaks, watch the mic and stop if you talk over it (§18).
+        import threading
+        barge_event = threading.Event()
+        monitor = None
+        if self.barge_in and self._mic is not None:
+            from .bargein import BargeInMonitor
+            # If a voiceprint is enrolled, verify barge-in speech is YOU — so Jarvis's own
+            # audio through speakers can't interrupt it (only your real voice does). This is
+            # independent of owner-only *responding* (§3).
+            verify = None
+            if self.speaker is not None:
+                get_vp = getattr(self.speaker, "get_enrolled_vector", None)
+                if callable(get_vp) and get_vp() is not None:
+                    verify = self.speaker.is_owner
+            monitor = BargeInMonitor(self._mic, self._speech_threshold * 2.0, barge_event,
+                                     verify=verify, log=self.log if self.debug else None)
+            monitor.start()
+
+        sink = _SentenceSpeaker(self.tts, stop_check=barge_event.is_set)
+        # Route through the agent runtime (M1 chat / M2-M3 do tasks) if available,
+        # else fall back to plain conversation.
+        if self.runtime is not None:
+            reply = self.runtime.handle(text, speak=sink.feed)
+        else:
+            reply = self.brain.handle_turn(text, speak=sink.feed)
         sink.flush()
+
+        if monitor is not None:
+            monitor.stop()
+        self._barged = barge_event.is_set()
+        if self._barged:
+            self.log("[voice] (interrupted — I'm listening)")
         self.log(f"[jarvis] {reply}")
         return True

@@ -6,6 +6,7 @@ require human approval before the function runs. This is the single safe path fo
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -45,6 +46,16 @@ class Tool:
                 pass
         return f"{self.name}({', '.join(f'{k}={v!r}' for k, v in kwargs.items())})"
 
+    def params(self) -> list[str]:
+        """Parameter names the tool function accepts (so agents call it correctly)."""
+        try:
+            return [
+                name for name, p in inspect.signature(self.func).parameters.items()
+                if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            ]
+        except (ValueError, TypeError):
+            return []
+
 
 class ToolRegistry:
     def __init__(self, approval: Optional[ApprovalEngine] = None, journal=None):
@@ -70,12 +81,17 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def catalog(self) -> list[dict]:
-        """Machine-readable list for an agent to choose from."""
-        return [{"name": t.name, "description": t.description, "risk": t.action_type.value}
+        """Machine-readable list for an agent to choose from (incl. accepted params)."""
+        return [{"name": t.name, "description": t.description,
+                 "risk": t.action_type.value, "params": t.params()}
                 for t in self._tools.values()]
 
-    def execute(self, name: str, **kwargs) -> ToolResult:
-        """Run a tool, gating irreversible ones through the approval engine (§11)."""
+    def execute(self, name: str, /, **kwargs) -> ToolResult:
+        """Run a tool, gating irreversible ones through the approval engine (§11).
+
+        `name` is positional-only so a tool whose own argument is called `name`
+        (e.g. open_app(name=...)) doesn't collide with this method's parameter.
+        """
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult.failure(f"no such tool: {name}")
@@ -97,6 +113,9 @@ class ToolRegistry:
             result = tool.func(**kwargs)
             if not isinstance(result, ToolResult):
                 result = ToolResult.success(result)
+        except TypeError as e:  # wrong arg names → tell the agent what's accepted
+            result = ToolResult.failure(
+                f"{e}. This tool accepts args: {', '.join(tool.params()) or 'none'}.")
         except Exception as e:  # graceful failure (§21)
             result = ToolResult.failure(f"{type(e).__name__}: {e}")
 

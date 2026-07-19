@@ -36,6 +36,15 @@ def test_unknown_tool():
     assert reg.execute("nope").ok is False
 
 
+def test_tool_with_name_argument_does_not_collide():
+    # A tool whose own arg is called 'name' must work (open_app(name=...) case).
+    reg = ToolRegistry()
+    reg.register(Tool("open_app", "opens", lambda name="": ToolResult.success(f"opened {name}"),
+                      ActionType.OPEN_APP))
+    res = reg.execute("open_app", name="Google Chrome")
+    assert res.ok and res.output == "opened Google Chrome"
+
+
 def test_exception_is_graceful():
     reg = ToolRegistry()
 
@@ -65,4 +74,18 @@ def test_catalog_and_decorator():
 
     assert "adder" in reg.names()
     assert reg.execute("adder", a=2, b=3).output == 5
-    assert reg.catalog()[0]["name"] == "adder"
+    cat = reg.catalog()[0]
+    assert cat["name"] == "adder"
+    assert cat["params"] == ["a", "b"]   # params advertised so agents call correctly
+
+
+def test_wrong_args_error_lists_accepted_params():
+    reg = ToolRegistry()
+
+    @reg.tool("greet", "greets", ActionType.NETWORK_FETCH)
+    def _greet(name=""):
+        return ToolResult.success(f"hi {name}")
+
+    res = reg.execute("greet", wrongarg="x")
+    assert res.ok is False
+    assert "accepts args: name" in res.error

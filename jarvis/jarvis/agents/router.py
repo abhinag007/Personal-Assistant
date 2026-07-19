@@ -14,14 +14,17 @@ from .state import Mode
 _ACTION_CUES = re.compile(
     r"\b(remind|schedule|book|email|send|draft|find|search|look up|research|"
     r"summari[sz]e|plan|organi[sz]e|create|make|write|build|check|update|delete|"
-    r"add|set up|calculate|compute)\b",
+    r"add|set up|calculate|compute|"
+    r"open|launch|start|run|close|play|show|go to|navigate|browse to)\b",
     re.IGNORECASE,
 )
 
 # Cues that a goal is multi-part / decomposable (→ M3).
 _MULTI_CUES = re.compile(
-    r"\band then\b|\bafter that\b|,\s*then\b|\bboth\b|\bmultiple\b|\beach of\b|"
-    r"\bresearch .+ and (write|build|create|plan)\b|\bcompare\b",
+    r"\band then\b|\bafter that\b|,\s*then\b|\bboth\b|\bmultiple\b|\beach of\b|\bcompare\b|"
+    # "research/find/gather ... and (summarise|write|analyse|list|...)"  → a research+produce goal
+    r"\b(research|find|gather|look up|analy[sz]e|investigate|explore)\b.+\band\b.+"
+    r"\b(summari[sz]e|write|build|create|plan|analy[sz]e|list|recommend|report|compare|draft)\b",
     re.IGNORECASE,
 )
 

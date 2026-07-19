@@ -30,8 +30,9 @@ class ActionType(str, Enum):
     SEND_MESSAGE = "send_message"          # email / chat → irreversible
     SPEND_MONEY = "spend_money"            # purchases / transfers → irreversible
     POST_ONLINE = "post_online"            # irreversible
-    RUN_COMMAND = "run_command"            # depends; classified case-by-case in later phases
+    RUN_COMMAND = "run_command"            # arbitrary shell → irreversible (needs approval)
     NETWORK_FETCH = "network_fetch"        # read-only web fetch → reversible
+    OPEN_APP = "open_app"                  # open an app/file/url → reversible (harmless)
 
 
 # The static risk map. This is the heart of §11 and must stay conservative:
@@ -41,6 +42,7 @@ RISK_MAP: dict[ActionType, ActionRisk] = {
     ActionType.NETWORK_FETCH: ActionRisk.REVERSIBLE,
     ActionType.WRITE_SANDBOX: ActionRisk.REVERSIBLE,
     ActionType.DELETE_SANDBOX: ActionRisk.REVERSIBLE,
+    ActionType.OPEN_APP: ActionRisk.REVERSIBLE,
     ActionType.WRITE_OUTSIDE: ActionRisk.IRREVERSIBLE,
     ActionType.DELETE_OUTSIDE: ActionRisk.IRREVERSIBLE,
     ActionType.SEND_MESSAGE: ActionRisk.IRREVERSIBLE,

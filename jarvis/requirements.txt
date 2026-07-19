@@ -4,7 +4,12 @@
 
 cryptography>=42.0        # vault + backup encryption (Fernet / AES-GCM)
 keyring>=25.0             # OS keychain for the vault master key (macOS Keychain)
+ddgs>=6.0                # free web search for agents (DuckDuckGo, no API key)
+langgraph>=0.2           # agent orchestration graphs + durable HITL interrupts (§2A)
 pytest>=8.0              # test runner
+
+# Optional (browser tool for JS-heavy pages / interactive actions):
+#   pip install playwright && playwright install chromium
 
 # Note: chat mode runs offline on the built-in MockAdapter with zero extra deps.
 # To use the real OpenAI brain, also: pip install openai   (or use requirements-voice.txt)

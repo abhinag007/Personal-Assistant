@@ -38,6 +38,17 @@ def test_router_multi_for_compound():
     assert route_mode("research the top 3 laptops and then write me a summary") is Mode.M3_MULTI
 
 
+def test_router_multi_for_research_and_summarise():
+    # "research ... and summarise" is a compound research+produce goal → M3.
+    assert route_mode("research the 3 newest AI coding tools in 2026 and summarise them") is Mode.M3_MULTI
+    assert route_mode("find the best budget phones and compare them") is Mode.M3_MULTI
+
+
+def test_router_single_for_plain_search():
+    # A bare search/lookup is still a single agent (M2), not M3.
+    assert route_mode("search the web for the weather") is Mode.M2_AGENT
+
+
 # ---- agent (ReAct) -------------------------------------------------------
 
 def test_agent_uses_tool_then_finishes():
@@ -74,6 +85,26 @@ def test_agent_treats_nonjson_as_final():
     adapter = ScriptedAdapter(["Just a plain answer."])
     res = Agent(adapter, reg, []).run("say something")
     assert res.ok and res.output == "Just a plain answer."
+
+
+def test_parse_action_tolerates_model_formats():
+    from jarvis.agents.agent import _parse_action
+    tools = ["browser_search", "open_app"]
+    # our protocol
+    assert _parse_action('{"tool": "open_app", "args": {"name": "Chrome"}}', tools)[:2] == ("tool", "open_app")
+    # OpenAI function style
+    assert _parse_action('{"name": "open_app", "arguments": {"name": "Chrome"}}', tools)[:2] == ("tool", "open_app")
+    # tool name AS the key (what gpt-4o emitted)
+    kind, name, args = _parse_action('{"browser_search": {"query": "keyboards"}}', tools)
+    assert kind == "tool" and name == "browser_search" and args == {"query": "keyboards"}
+    # unknown single-key dict is NOT a tool → treated as final
+    assert _parse_action('{"something": 1}', tools)[0] == "final"
+
+
+def test_router_open_commands_are_actions():
+    assert route_mode("open Google Chrome") is Mode.M2_AGENT
+    assert route_mode("open my notes.txt on the Desktop") is Mode.M2_AGENT
+    assert route_mode("launch VS Code") is Mode.M2_AGENT
 
 
 # ---- orchestrator (M3) ---------------------------------------------------
