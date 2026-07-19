@@ -21,6 +21,7 @@ import time
 from typing import Optional
 
 from ..brain.loop import BrainLoop
+from ..core.policy import ActionRisk
 from .activity import UtteranceSegmenter, frame_is_speech, frame_rms, split_on_wake
 from .addressing import is_addressed
 
@@ -72,6 +73,8 @@ class LiveVoiceLoop:
         self._barged = False
         self.log = log
         self._speech_threshold = 500.0  # replaced by calibration
+        if self.runtime is not None and hasattr(self.runtime, "approval"):
+            self.runtime.approval.set_approver(self._approve_by_voice)
 
     # ---- calibration -----------------------------------------------------
 
@@ -299,3 +302,56 @@ class LiveVoiceLoop:
             self.log("[voice] (interrupted — I'm listening)")
         self.log(f"[jarvis] {reply}")
         return True
+
+    # ---- spoken approval -------------------------------------------------
+
+    def _approve_by_voice(self, request, risk: ActionRisk) -> bool:
+        """ApprovalEngine callback for voice mode.
+
+        It speaks the requested action, listens for one short answer, and accepts only clear
+        yes/approve/confirm language. This is used by irreversible tools such as run_command
+        and gmail_send while the live loop owns the mic.
+        """
+        prompt = f"Approval required. {request.summary}. Say yes to approve, or no to cancel."
+        self.log(f"[approval] {request.summary} ({risk.value})")
+        try:
+            self.tts.speak(prompt)
+        except Exception:
+            pass
+
+        answer = self._listen_for_approval_answer(timeout=12.0)
+        low = answer.lower().strip()
+        approved = any(w in low for w in ("yes", "approve", "approved", "confirm", "do it"))
+        denied = any(w in low for w in ("no", "deny", "cancel", "stop", "don't", "do not"))
+        if approved and not denied:
+            self.log("[approval] approved by voice")
+            return True
+        self.log(f"[approval] denied or unclear: {answer!r}")
+        try:
+            self.tts.speak("Cancelled.")
+        except Exception:
+            pass
+        return False
+
+    def _listen_for_approval_answer(self, timeout: float = 12.0) -> str:
+        """Capture and transcribe one short yes/no answer from the current mic."""
+        if self._mic is None:
+            try:
+                return input("Approve? (yes/no): ").strip()
+            except Exception:
+                return ""
+
+        self._mic.drain()
+        seg = UtteranceSegmenter(min_speech_frames=2, end_silence_frames=8, max_frames=120)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            frame = self._mic.read()
+            utterance = seg.feed(frame_is_speech(frame, self._speech_threshold), frame)
+            if utterance is None:
+                continue
+            text = self._transcribe(b"".join(utterance), check_owner=True)
+            if text:
+                self.log(f"[approval heard] {text}")
+                return text
+            seg.reset()
+        return ""

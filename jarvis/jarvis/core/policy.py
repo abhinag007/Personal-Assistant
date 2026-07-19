@@ -23,6 +23,7 @@ class ActionRisk(str, Enum):
 class ActionType(str, Enum):
     READ_FILE = "read_file"
     WRITE_SANDBOX = "write_sandbox"        # write inside the sandbox → reversible via git
+    WRITE_FILE = "write_file"              # AI-authored file write → asks, then sandbox guard
     WRITE_OUTSIDE = "write_outside"        # write outside sandbox → irreversible (needs approval)
     DELETE_SANDBOX = "delete_sandbox"      # reversible via git
     DELETE_OUTSIDE = "delete_outside"      # irreversible
@@ -41,6 +42,7 @@ RISK_MAP: dict[ActionType, ActionRisk] = {
     ActionType.READ_FILE: ActionRisk.REVERSIBLE,
     ActionType.NETWORK_FETCH: ActionRisk.REVERSIBLE,
     ActionType.WRITE_SANDBOX: ActionRisk.REVERSIBLE,
+    ActionType.WRITE_FILE: ActionRisk.IRREVERSIBLE,
     ActionType.DELETE_SANDBOX: ActionRisk.REVERSIBLE,
     ActionType.OPEN_APP: ActionRisk.REVERSIBLE,
     ActionType.WRITE_OUTSIDE: ActionRisk.IRREVERSIBLE,

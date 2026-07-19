@@ -42,15 +42,18 @@ def _build_brain(config_dir: Path, cfg: Config):
     api_key = None
     try:
         vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
-        api_key = vault.get_secret("openai_api_key")
+        api_key = vault.get_secret(getattr(cfg, "api_key_secret", "openai_api_key"))
         if api_key:
             provider = "openai"
     except Exception:
         pass
 
-    adapter = build_adapter(provider, api_key=api_key, model=cfg.model)
-    # Real semantic embeddings when on OpenAI; deterministic hash embedder offline.
-    embedder = AdapterEmbedder(adapter) if provider == "openai" else HashEmbedder()
+    import os as _os
+    base_url = cfg.base_url or _os.environ.get("JARVIS_BASE_URL") or None
+    adapter = build_adapter(provider, api_key=api_key, model=cfg.model, base_url=base_url)
+    # Real embeddings only for genuine OpenAI; custom endpoints (GLM) may not embed → hash.
+    use_real_embed = provider == "openai" and not base_url
+    embedder = AdapterEmbedder(adapter) if use_real_embed else HashEmbedder()
 
     memory = MemoryStore(config_dir / "memory" / "jarvis.db", embedder=embedder)
     audit = AuditLog(config_dir / "logs" / "audit.jsonl")
@@ -245,7 +248,8 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
             addr_model = os.environ.get("JARVIS_ADDRESSING_MODEL", "gpt-4o")
             try:
                 from .llm import build_adapter
-                addressing_adapter = build_adapter("openai", api_key=api_key, model=addr_model)
+                addressing_adapter = build_adapter("openai", api_key=api_key, model=addr_model,
+                                                   base_url=cfg.base_url or None)
             except Exception as e:
                 print(f"[Jarvis] couldn't build gpt-4o addressing model ({e}); using {adapter.name}")
 
@@ -338,7 +342,8 @@ def _runtime(config_dir: Path, cfg, *, brain=None, adapter=None, background=Fals
         vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
     except Exception:
         pass
-    return Runtime(adapter, config_dir, vault=vault, brain=brain, background=background), adapter
+    return Runtime(adapter, config_dir, vault=vault, brain=brain, background=background,
+                   sandbox_path=cfg.sandbox_path), adapter
 
 
 def _agent(config_dir: Path, goal: str | None):
@@ -523,12 +528,33 @@ def _backup(config_dir: Path, dest: str | None):
 def _set_model(config_dir: Path, model: str | None):
     cfg = Config.load(config_dir)
     if not model:
-        print(f"[Jarvis] Current model: {cfg.model}")
-        print("Usage: python -m jarvis.main set-model gpt-4o   (e.g. gpt-4o, gpt-4o-mini)")
+        print(f"[Jarvis] Current model: {cfg.model}  | endpoint: {cfg.base_url or 'OpenAI default'}")
+        print("Usage: python -m jarvis.main set-model gpt-4o   (or glm-4.6, etc.)")
         return
     cfg.model = model
     cfg.save(config_dir)
     print(f"[Jarvis] Brain model set to: {model}")
+
+
+def _set_endpoint(config_dir: Path, url: str | None):
+    """Point the brain at any OpenAI-compatible endpoint (GLM/Z.ai, vLLM). Empty = OpenAI."""
+    cfg = Config.load(config_dir)
+    if url is None:
+        print(f"[Jarvis] Current endpoint: {cfg.base_url or 'OpenAI default'}")
+        print("Usage: python -m jarvis.main set-endpoint https://api.z.ai/api/paas/v4")
+        print("       python -m jarvis.main set-endpoint default   (back to OpenAI)")
+        print("Run --onboard to store the matching provider token, then set-model <model-id>.")
+        return
+    if url.lower() in ("default", "openai", "none"):
+        cfg.base_url = ""
+        cfg.api_key_secret = "openai_api_key"
+    else:
+        cfg.base_url = url
+        if "z.ai" in url.lower() or "bigmodel" in url.lower():
+            cfg.api_key_secret = "glm_api_key"
+    cfg.save(config_dir)
+    print(f"[Jarvis] Endpoint set to: {cfg.base_url or 'OpenAI default'}")
+    print(f"[Jarvis] Active API key vault entry: {cfg.api_key_secret}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -536,7 +562,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("command", nargs="?", default="demo",
                         choices=["demo", "chat", "voice", "voice-enroll", "voice-test",
                                  "agent", "remind", "brief", "tasks", "telegram-chatid",
-                                 "search", "hitl", "bench", "backup", "set-model"],
+                                 "search", "hitl", "bench", "backup", "set-model",
+                                 "set-endpoint"],
                         help="what to run (default: demo)")
     parser.add_argument("arg", nargs="?", default=None, help="argument for the command")
     parser.add_argument("--onboard", action="store_true", help="run first-run setup")
@@ -577,6 +604,8 @@ def main(argv: list[str] | None = None) -> None:
         _backup(config_dir, args.dest)
     elif args.command == "set-model":
         _set_model(config_dir, args.arg)
+    elif args.command == "set-endpoint":
+        _set_endpoint(config_dir, args.arg)
     else:
         _demo(config_dir)
 

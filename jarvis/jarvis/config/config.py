@@ -18,7 +18,9 @@ DEFAULT_CONFIG_DIR = Path(os.path.expanduser("~")) / ".jarvis"
 class Config:
     sandbox_path: str = ""
     assistant_name: str = "Jarvis"
-    model: str = "gpt-4o-mini"       # OpenAI model for the brain (§1); switch with set-model
+    model: str = "gpt-4o-mini"       # model for the brain (§1); switch with set-model
+    base_url: str = ""               # OpenAI-compatible endpoint (GLM/Z.ai, vLLM); set-endpoint
+    api_key_secret: str = "openai_api_key"  # vault key for the active OpenAI-compatible provider
     wake_word: str = "hey jarvis"
     chattiness: str = "balanced"     # quiet | balanced | chatty (§34)
     quiet_hours: str = ""            # e.g. "22:00-07:00"

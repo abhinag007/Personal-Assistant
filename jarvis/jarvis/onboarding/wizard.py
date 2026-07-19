@@ -44,6 +44,47 @@ def _manage_secret(vault, name, label, *, input_fn, print_fn, secret_input_fn, s
     return bool(existing)
 
 
+def _configure_brain(cfg, vault, *, input_fn, print_fn, secret_input_fn):
+    """Choose the active OpenAI-compatible brain and store the matching provider token."""
+    current = "GLM/Z.ai" if cfg.base_url else "OpenAI"
+    print_fn("\nBrain:")
+    print_fn(f"  Current: {current} | model: {cfg.model} | endpoint: {cfg.base_url or 'OpenAI default'}")
+    print_fn("  1) OpenAI")
+    print_fn("  2) GLM/Z.ai (OpenAI-compatible)")
+    print_fn("  3) Custom OpenAI-compatible endpoint")
+    choice = input_fn("  Brain provider [1]: ").strip().lower() or "1"
+
+    common = dict(input_fn=input_fn, print_fn=print_fn, secret_input_fn=secret_input_fn)
+    if choice in ("1", "openai", "o"):
+        cfg.base_url = ""
+        cfg.api_key_secret = "openai_api_key"
+        model = input_fn(f"  OpenAI model [{cfg.model or 'gpt-4o-mini'}]: ").strip()
+        cfg.model = model or cfg.model or "gpt-4o-mini"
+        _manage_secret(vault, "openai_api_key", "OpenAI API key", **common)
+        return
+
+    if choice in ("2", "glm", "zai", "z.ai", "z"):
+        was_compatible_endpoint = bool(cfg.base_url)
+        default_endpoint = cfg.base_url or "https://api.z.ai/api/paas/v4"
+        endpoint = input_fn(f"  GLM endpoint [{default_endpoint}]: ").strip()
+        cfg.base_url = endpoint or default_endpoint
+        default_model = cfg.model if was_compatible_endpoint else "glm-5.2"
+        model = input_fn(f"  GLM model [{default_model}]: ").strip()
+        cfg.model = model or default_model
+        cfg.api_key_secret = "glm_api_key"
+        _manage_secret(vault, "glm_api_key", "GLM/Z.ai API key", **common)
+        return
+
+    default_endpoint = cfg.base_url or "http://localhost:8000/v1"
+    endpoint = input_fn(f"  Endpoint URL [{default_endpoint}]: ").strip()
+    cfg.base_url = endpoint or default_endpoint
+    model = input_fn(f"  Model [{cfg.model}]: ").strip()
+    cfg.model = model or cfg.model
+    secret_name = input_fn("  Vault secret name for this provider [custom_api_key]: ").strip()
+    cfg.api_key_secret = secret_name or "custom_api_key"
+    _manage_secret(vault, cfg.api_key_secret, "custom provider API key", **common)
+
+
 def run_onboarding(config_dir=None, *, input_fn=input, print_fn=print, secret_input_fn=None):
     """Interactive setup. input_fn/print_fn/secret_input_fn are injectable for testing."""
     secret_input_fn = secret_input_fn or getpass.getpass
@@ -65,8 +106,7 @@ def run_onboarding(config_dir=None, *, input_fn=input, print_fn=print, secret_in
     vault = Vault(cfg_dir / "vault.enc", key_provider=KeyringKeyProvider())
     common = dict(input_fn=input_fn, print_fn=print_fn, secret_input_fn=secret_input_fn)
 
-    print_fn("\nBrain (OpenAI):")
-    _manage_secret(vault, "openai_api_key", "OpenAI API key", **common)
+    _configure_brain(cfg, vault, **common)
 
     print_fn("\nWeb search (optional) — Tavily gives agents better research (free 1k/mo).")
     print_fn("  Get a key at tavily.com. Without it, free DuckDuckGo is used.")

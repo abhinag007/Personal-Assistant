@@ -1,5 +1,6 @@
 """Onboarding tests (§41) — keep-or-change secrets on re-run; Telegram fields."""
-from jarvis.onboarding.wizard import _manage_secret
+from jarvis.config import Config
+from jarvis.onboarding.wizard import _configure_brain, _manage_secret
 from jarvis.vault import Vault, FileKeyProvider
 
 
@@ -43,3 +44,31 @@ def test_blank_new_secret_is_skipped(tmp_path):
                    input_fn=lambda p: "", print_fn=lambda *_: None,
                    secret_input_fn=lambda p: "")
     assert v.get_secret("telegram_chat_id") is None
+
+
+def test_configure_brain_openai_stores_openai_key(tmp_path):
+    v = _vault(tmp_path)
+    cfg = Config()
+    answers = iter(["1", "gpt-4o"])
+    _configure_brain(cfg, v,
+                     input_fn=lambda p: next(answers, ""),
+                     print_fn=lambda *_: None,
+                     secret_input_fn=lambda p: "sk-openai")
+    assert cfg.base_url == ""
+    assert cfg.model == "gpt-4o"
+    assert cfg.api_key_secret == "openai_api_key"
+    assert v.get_secret("openai_api_key") == "sk-openai"
+
+
+def test_configure_brain_glm_stores_glm_key_and_endpoint(tmp_path):
+    v = _vault(tmp_path)
+    cfg = Config()
+    answers = iter(["2", "", "glm-5.2"])
+    _configure_brain(cfg, v,
+                     input_fn=lambda p: next(answers, ""),
+                     print_fn=lambda *_: None,
+                     secret_input_fn=lambda p: "sk-glm")
+    assert cfg.base_url == "https://api.z.ai/api/paas/v4"
+    assert cfg.model == "glm-5.2"
+    assert cfg.api_key_secret == "glm_api_key"
+    assert v.get_secret("glm_api_key") == "sk-glm"

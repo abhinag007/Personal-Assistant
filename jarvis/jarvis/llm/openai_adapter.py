@@ -17,11 +17,14 @@ class OpenAIAdapter(ModelAdapter):
         api_key: str,
         model: str = "gpt-4o-mini",
         embed_model: str = "text-embedding-3-small",
+        base_url: str | None = None,   # OpenAI-compatible endpoint (GLM/Z.ai, vLLM, …)
     ):
         self._api_key = api_key
         self._model = model
         self._embed_model = embed_model
-        self.name = f"openai:{model}"
+        self._base_url = base_url or None
+        label = model if not base_url else f"{model}@{base_url.split('//')[-1].split('/')[0]}"
+        self.name = f"openai:{label}"
         self.__client = None
 
     def _client(self):
@@ -30,7 +33,8 @@ class OpenAIAdapter(ModelAdapter):
 
             from openai import OpenAI  # lazy import
 
-            client = OpenAI(api_key=self._api_key)
+            client = OpenAI(api_key=self._api_key, base_url=self._base_url) if self._base_url \
+                else OpenAI(api_key=self._api_key)
             # Real LangSmith tracing (§2A.5): if a LangSmith key is configured, wrap the
             # client so every model call (chat, addressing, fact-extraction) is traced.
             # Zero effect when LANGSMITH_API_KEY isn't set. Never breaks if the SDK is absent.

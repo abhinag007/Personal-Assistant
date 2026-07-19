@@ -111,7 +111,7 @@ Always run inside the activated venv (`source .venv/bin/activate`), and use the
 
 | Command | What it does |
 |---|---|
-| `python -m jarvis.main --onboard` | First-run setup: sandbox path, git init, store a secret (e.g. `openai_api_key`), kill-switch explainer. |
+| `python -m jarvis.main --onboard` | First-run setup: sandbox path, git init, choose OpenAI/GLM/custom brain, store the matching API key, kill-switch explainer. |
 | `python -m jarvis.main chat` | Text conversation with the brain + memory (no audio). |
 | `python -m jarvis.main voice` | Real always-on voice: say **"Hey Jarvis"**, then talk. |
 | `python -m jarvis.main voice-enroll` | Record your voiceprint (3 clips) → Jarvis responds only to you. |
@@ -226,9 +226,20 @@ folders), `open_url`, and `browser_search` — all reversible, run freely. **Ter
 approval-gated. Examples: "open Chrome", "search the web for X", "open my notes on the Desktop",
 "open VS Code".
 
+**Writing code/files:** agents now have a `write_file` tool. It requires approval, writes only
+inside the configured sandbox through `SandboxGuard`, and auto-commits the change with git so it
+can be rolled back.
+
+**Voice approval:** in `voice` mode, irreversible actions such as `run_command` and `gmail_send`
+ask for spoken approval. Say a clear "yes/approve" to continue or "no/cancel" to stop.
+
 **Web tools:** `web_search` and `web_fetch` work out of the box (`ddgs` is in requirements).
 The `browse` tool needs Playwright: `pip install playwright && playwright install chromium`.
 Now `agent "research X and summarise"` actually searches the web instead of answering from memory.
+
+**Gmail via Playwright:** `gmail_inbox`, `gmail_draft`, and `gmail_send` use a persistent Chromium
+profile at `<config-dir>/browser/gmail-profile`. First use opens Gmail in a real browser; log in
+once and Jarvis reuses that session. `gmail_send` is still irreversible and approval-gated.
 
 **Telegram (optional, free):** store `telegram_bot_token` and `telegram_chat_id` in the vault
 (via `--onboard`) to get phone notifications when you're away from the PC.
@@ -258,6 +269,14 @@ otherwise. `jarvis/agents/hitl.py` shows durable **human-in-the-loop** pause/res
 **Voice does things:** spoken/typed requests route through `Runtime.handle()` — M1 chat via the
 brain (memory), M2/M3 via agents + tools — so "Jarvis, remind me to call mom" actually creates
 the reminder. Real Gmail/browser actions plug into the same connector interfaces. See `PHASE2_PLAN.md`.
+
+**OpenAI-compatible endpoints (GLM/Z.ai, vLLM):**
+
+```bash
+python -m jarvis.main set-endpoint https://api.z.ai/api/paas/v4
+python -m jarvis.main set-model glm-4.6
+python -m jarvis.main set-endpoint default   # back to OpenAI default
+```
 
 **Multitasking:** long (M3) tasks run in a background worker thread — Jarvis says "On it" and
 you keep talking; it announces the result when done (speak if you're here, phone if away).

@@ -22,6 +22,7 @@ def build_adapter(
     *,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> ModelAdapter:
     provider = (provider or "mock").lower()
 
@@ -33,7 +34,8 @@ def build_adapter(
             raise ValueError("OpenAI provider requires an API key (store it via onboarding, §14).")
         from .openai_adapter import OpenAIAdapter
 
-        return OpenAIAdapter(api_key=api_key, model=model or "gpt-4o-mini")
+        # base_url lets you point at any OpenAI-compatible endpoint (GLM/Z.ai, local vLLM).
+        return OpenAIAdapter(api_key=api_key, model=model or "gpt-4o-mini", base_url=base_url)
 
     if provider == "claude":
         raise NotImplementedError("Claude adapter is added in a later phase.")

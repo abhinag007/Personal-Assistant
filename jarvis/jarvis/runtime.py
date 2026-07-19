@@ -14,7 +14,9 @@ from .agents.agent import Agent
 from .agents.state import Mode
 from .connectors import CalendarStore
 from .core.approval import ApprovalEngine
+from .core.git_tracker import GitTracker
 from .core.policy import ActionType
+from .core.sandbox_guard import SandboxGuard, SandboxViolation
 from .handoff import HandoffManager, StubNotifier, TelegramNotifier
 from .journal import DecisionJournal, StagingStore
 from .tasks import JobStatus, TaskQueue, Worker
@@ -23,7 +25,7 @@ from .tools import ToolRegistry, ToolResult, WebSearch, web_fetch
 
 class Runtime:
     def __init__(self, adapter, config_dir: str | Path, *, approver=None, vault=None,
-                 brain=None, background=False):
+                 brain=None, background=False, sandbox_path: str = ""):
         self.adapter = adapter
         self.brain = brain          # BrainLoop for M1 conversation + memory (optional)
         self.background = background  # dispatch long tasks to a worker thread (voice/chat)
@@ -33,6 +35,9 @@ class Runtime:
         self.calendar = CalendarStore(self.dir / "memory" / "calendar.db")
         self.approval = ApprovalEngine(approver=approver) if approver else ApprovalEngine()
         self.registry = ToolRegistry(approval=self.approval, journal=self.journal)
+        self.sandbox_path = sandbox_path
+        self.guard = SandboxGuard(sandbox_path) if sandbox_path else None
+        self.git = GitTracker(sandbox_path) if sandbox_path else None
 
         # Notifier: real Telegram if a bot token + chat id are in the vault, else stub.
         notifier = StubNotifier()
@@ -92,6 +97,25 @@ class Runtime:
             title = title or (body[:40] if body else "note")
             sid = self.staging.add("note", title, {"body": body})
             return ToolResult.success(f"staged (id {sid})")
+
+        @reg.tool("write_file", "Write text/code to a file inside the Jarvis sandbox. "
+                  "args: path (relative to sandbox), content (str). Requires approval, "
+                  "then writes through the sandbox guard and auto-commits.",
+                  ActionType.WRITE_FILE)
+        def _write_file(path="", content="", **kw):
+            content = content if content != "" else kw.get("text", "")
+            if not self.guard or not self.git:
+                return ToolResult.failure("sandbox is not configured; run onboarding first")
+            if not path:
+                return ToolResult.failure("path required")
+            try:
+                target = self.guard.write_text(path, content)
+                self.git.auto_commit(f"write_file {target.relative_to(self.guard.sandbox_root)}")
+            except SandboxViolation as e:
+                return ToolResult.failure(str(e))
+            except Exception as e:
+                return ToolResult.failure(f"{type(e).__name__}: {e}")
+            return ToolResult.success(f"wrote and committed {target}")
 
         # ---- web tools (real research) ----------------------------------
         # Tavily first if a key is stored, else DuckDuckGo (auto-fallback on limit/error).
@@ -158,6 +182,49 @@ class Runtime:
                 return ToolResult.failure(str(e))
             finally:
                 br.close()
+
+        # ---- Gmail via persistent Playwright profile (§39) ---------------
+        @reg.tool("gmail_inbox", "Read visible Gmail inbox items using a persistent browser "
+                  "profile. Args: limit (int). First run may ask you to log in.",
+                  ActionType.NETWORK_FETCH)
+        def _gmail_inbox(limit=10):
+            try:
+                from .connectors.email import GmailPlaywrightConnector
+                conn = GmailPlaywrightConnector(self.dir / "browser" / "gmail-profile",
+                                                headless=False)
+                msgs = conn.inbox(limit=int(limit or 10))
+                return ToolResult.success(
+                    "\n".join(f"- from {m.sender}: {m.subject}" for m in msgs) or
+                    "No visible Gmail messages found."
+                )
+            except Exception as e:
+                return ToolResult.failure(str(e))
+
+        @reg.tool("gmail_draft", "Create a Gmail draft in the persistent browser profile. "
+                  "Args: to, subject, body. Does not send.",
+                  ActionType.WRITE_SANDBOX)
+        def _gmail_draft(to="", subject="", body=""):
+            try:
+                from .connectors.email import Draft, GmailPlaywrightConnector
+                conn = GmailPlaywrightConnector(self.dir / "browser" / "gmail-profile",
+                                                headless=False)
+                conn.create_draft(Draft(to=to, subject=subject, body=body))
+                return ToolResult.success("Gmail draft created; I did not send it.")
+            except Exception as e:
+                return ToolResult.failure(str(e))
+
+        @reg.tool("gmail_send", "Send an email through Gmail. Args: to, subject, body. "
+                  "Irreversible: requires approval before sending.",
+                  ActionType.SEND_MESSAGE)
+        def _gmail_send(to="", subject="", body=""):
+            try:
+                from .connectors.email import Draft, GmailPlaywrightConnector
+                conn = GmailPlaywrightConnector(self.dir / "browser" / "gmail-profile",
+                                                headless=False)
+                ok = conn.send(Draft(to=to, subject=subject, body=body))
+                return ToolResult.success("email sent") if ok else ToolResult.failure("send failed")
+            except Exception as e:
+                return ToolResult.failure(str(e))
 
     # ---- request handling (M1/M2/M3) -------------------------------------
 

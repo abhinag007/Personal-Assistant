@@ -50,6 +50,12 @@ def test_router_openai_requires_key():
         build_adapter("openai", api_key=None)
 
 
+def test_router_openai_accepts_compatible_base_url():
+    a = build_adapter("openai", api_key="test", model="glm-4.6",
+                      base_url="https://api.z.ai/api/paas/v4")
+    assert "glm-4.6@api.z.ai" in a.name
+
+
 def test_router_rejects_unknown_provider():
     with pytest.raises(ValueError):
         build_adapter("banana")

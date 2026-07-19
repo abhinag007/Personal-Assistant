@@ -1,6 +1,9 @@
 """Runtime.handle routing tests (§2A) — M1 via brain, M2/M3 via agents, memory writes."""
 import tempfile
 from pathlib import Path
+import shutil
+
+import pytest
 
 from jarvis.brain import BrainLoop
 from jarvis.llm import MockAdapter
@@ -58,3 +61,33 @@ def test_handle_without_brain_still_answers(tmp_path):
     rt = Runtime(MockAdapter(), tmp_path)          # no brain
     out = rt.handle("hello", speak=lambda c: None)  # M1 falls back to bare chat
     assert out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_write_file_tool_requires_approval(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    rt = Runtime(MockAdapter(), tmp_path, sandbox_path=str(sandbox), approver=lambda r, k: False)
+    res = rt.registry.execute("write_file", path="app.py", content="print('hi')\n")
+    assert res.ok is False
+    assert not (sandbox / "app.py").exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_write_file_tool_writes_inside_sandbox_and_commits(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    rt = Runtime(MockAdapter(), tmp_path, sandbox_path=str(sandbox), approver=lambda r, k: True)
+    res = rt.registry.execute("write_file", path="src/app.py", content="print('hi')\n")
+    assert res.ok
+    assert (sandbox / "src" / "app.py").read_text() == "print('hi')\n"
+    assert any("write_file src/app.py" in c for c in rt.git.last_commits())
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_write_file_tool_blocks_sandbox_escape_after_approval(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    outside = tmp_path / "outside.py"
+    rt = Runtime(MockAdapter(), tmp_path, sandbox_path=str(sandbox), approver=lambda r, k: True)
+    res = rt.registry.execute("write_file", path=str(outside), content="bad")
+    assert res.ok is False
+    assert "outside the sandbox" in res.error
+    assert not outside.exists()
