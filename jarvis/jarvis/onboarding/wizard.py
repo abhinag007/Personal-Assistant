@@ -85,6 +85,25 @@ def _configure_brain(cfg, vault, *, input_fn, print_fn, secret_input_fn):
     _manage_secret(vault, cfg.api_key_secret, "custom provider API key", **common)
 
 
+def _has_secret(vault, name: str) -> bool:
+    try:
+        return bool(vault.get_secret(name))
+    except Exception:
+        return False
+
+
+def _print_setup_summary(cfg, vault, *, print_fn) -> None:
+    provider = "OpenAI" if not cfg.base_url else (
+        "GLM/Z.ai" if cfg.api_key_secret == "glm_api_key" else "Custom OpenAI-compatible")
+    print_fn("\nSetup summary:")
+    print_fn(f"  Brain:     {provider}")
+    print_fn(f"  Model:     {cfg.model}")
+    print_fn(f"  Endpoint:  {cfg.base_url or 'OpenAI default'}")
+    print_fn(f"  Key slot:  {cfg.api_key_secret} ({'set' if _has_secret(vault, cfg.api_key_secret) else 'missing'})")
+    telegram_ready = _has_secret(vault, "telegram_bot_token") and _has_secret(vault, "telegram_chat_id")
+    print_fn(f"  Telegram:  {'ready for outbound + inbound' if telegram_ready else 'not fully configured'}")
+
+
 def run_onboarding(config_dir=None, *, input_fn=input, print_fn=print, secret_input_fn=None):
     """Interactive setup. input_fn/print_fn/secret_input_fn are injectable for testing."""
     secret_input_fn = secret_input_fn or getpass.getpass
@@ -130,5 +149,6 @@ def run_onboarding(config_dir=None, *, input_fn=input, print_fn=print, secret_in
     AuditLog(cfg_dir / "logs" / "audit.jsonl").record(
         "onboarding", "Completed setup", risk="reversible", reason="User ran the setup wizard.")
 
+    _print_setup_summary(cfg, vault, print_fn=print_fn)
     print_fn("=== Setup complete. ===\n")
     return cfg

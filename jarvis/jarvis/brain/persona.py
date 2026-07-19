@@ -44,6 +44,13 @@ def build_system_prompt(
     if facts:
         lines = "\n".join(f"- {k}: {v}" for k, v in facts.items())
         prompt += "\n\nWhat you know about the user (because they told you):\n" + lines
+        preferred = facts.get("preferred_address")
+        name = facts.get("name")
+        if preferred and preferred != name:
+            prompt += (
+                f"\n\nAddress the user as {preferred}. Do not confuse this preferred "
+                "address with their actual name."
+            )
 
     # Curiosity tone (the actual question is appended deterministically by the brain loop).
     prompt += persona_curiosity_note(profile_facts or {})

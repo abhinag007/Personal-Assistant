@@ -59,6 +59,27 @@ class StagingStore:
             return True
         return False
 
+    def discard_kind(self, kind: str) -> int:
+        removed = 0
+        for item in self.list():
+            if item.kind.lower() == kind.lower() and self.discard(item.id):
+                removed += 1
+        return removed
+
+    def update(self, item_id: str, *, title: str | None = None, payload: dict | None = None) -> bool:
+        item = self.get(item_id)
+        if item is None:
+            return False
+        data = {
+            "id": item.id,
+            "kind": item.kind,
+            "title": title if title is not None else item.title,
+            "payload": payload if payload is not None else item.payload,
+            "created": item.created,
+        }
+        self._path(item_id).write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        return True
+
     def prune(self, older_than_seconds: float, *, now: Optional[float] = None) -> int:
         """Delete staged items older than the cutoff (keeps scratch from piling up)."""
         now = now if now is not None else time.time()

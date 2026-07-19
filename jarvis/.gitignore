@@ -10,7 +10,7 @@ vault/*.enc
 vault/*.key
 *.secret
 logs/
-memory/
+/memory/
 backups/
 .jarvis_runtime/
 

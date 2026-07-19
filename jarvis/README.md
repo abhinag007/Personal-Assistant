@@ -86,6 +86,28 @@ python -m jarvis.main voice-enroll       # (optional) record your voiceprint →
 python -m jarvis.main voice              # always-on: say "Hey Jarvis" to start talking
 ```
 
+On its first start, `voice` asks a short preflight and saves those non-secret choices in
+`~/.jarvis/config.json`. Later it first asks **"Run with previous voice settings"**: press
+**Enter** or answer **yes** to start immediately, or answer **no** to review and replace every
+choice. Yes/no prompts accept `y/n`, `yes/no`, `t/f`, or `true/false`. Use
+`--no-voice-preflight` only when you want env/default behavior with no questions.
+
+| Startup question | What choosing it means |
+|---|---|
+| **Brain provider** | `openai` uses your stored OpenAI key and default OpenAI endpoint. `glm` uses your stored GLM/Z.ai key and the Z.ai OpenAI-compatible endpoint. This choice is for the voice session and is saved as the next voice default. |
+| **Brain model** | The main assistant model for this voice session, for example `gpt-4o-mini`, `gpt-4o`, or `glm-5.2`. |
+| **STT model** | Speech-to-text model. `small.en` is fastest but less accurate; `medium.en` is the balanced default; `large-v3` is most accurate but slower/heavier. |
+| **Wake mode** | `stt` transcribes short speech and fuzzy-matches "Hey Jarvis"; this is usually most reliable. `model` uses openWakeWord directly; faster/lighter once tuned, but more sensitive to model setup. |
+| **Smart addressing** | **Yes:** Jarvis checks whether you are actually talking to it and ignores side conversations. **No:** once awake, Jarvis replies to every utterance until the session times out. |
+| **Addressing model** | The model used only for the "is this addressed to Jarvis?" yes/no decision. Keeping this strong improves reliability even if the main brain is cheaper. |
+| **Require owner voice** | **Yes:** if a voiceprint exists, only your enrolled voice is accepted. **No:** any voice can talk to Jarvis; useful for debugging or demos. |
+| **Speaker threshold** | Voice-match strictness. Higher is stricter; lower is more forgiving if Jarvis rejects you. Start with `0.25`, try `0.15` if needed. |
+| **Verbose voice debug** | **Yes:** prints wake/listening/speaker/latency logs. Useful while tuning. **No:** quieter once stable. |
+| **Nightly consolidation hour** | Hour `0-23` when Jarvis runs the memory "sleep pass" while voice mode is active. Default `2` means around 2 AM. |
+| **Daily spoken briefing hour** | Optional hour `0-23` for a spoken daily briefing. Blank disables spoken briefing. If the hour has already passed today and no briefing ran yet, Jarvis may speak it immediately after startup. |
+| **Enable shell command tool** | **Yes:** enables `run_command` for this voice session. It still asks explicit approval before every shell command. **No:** shell commands are unavailable. |
+| **Telegram poll interval** | How often voice mode checks your Telegram bot for inbound phone commands. Default `5` means about every five seconds. |
+
 **How it behaves** (the Jarvis interaction model):
 - Mic is always on but only listens for **"Hey Jarvis"** while idle.
 - Saying it **arms a session** — after that you just talk; no need to repeat the wake word.
@@ -109,11 +131,24 @@ python -m jarvis.main backup            # encrypted snapshot of ~/.jarvis/memory
 Always run inside the activated venv (`source .venv/bin/activate`), and use the
 `python -m jarvis.main ...` form (avoids the pyenv `pytest`/shim issue).
 
+Typical first-run flow:
+
+```bash
+python -m jarvis.main --onboard
+python -m jarvis.main onboarding-status
+python -m jarvis.main live-smoke
+python -m jarvis.main voice-test mic
+python -m jarvis.main voice-test stt
+python -m jarvis.main voice-test tts
+python -m jarvis.main voice
+```
+
 | Command | What it does |
 |---|---|
 | `python -m jarvis.main --onboard` | First-run setup: sandbox path, git init, choose OpenAI/GLM/custom brain, store the matching API key, kill-switch explainer. |
 | `python -m jarvis.main chat` | Text conversation with the brain + memory (no audio). |
-| `python -m jarvis.main voice` | Real always-on voice: say **"Hey Jarvis"**, then talk. |
+| `python -m jarvis.main voice` | Real always-on voice. Starts with an interactive options preflight, then say **"Hey Jarvis"**. When Telegram is configured, it also polls inbound Telegram messages in the background. |
+| `python -m jarvis.main voice --no-voice-preflight` | Start voice using env/default options without prompts. |
 | `python -m jarvis.main voice-enroll` | Record your voiceprint (3 clips) → Jarvis responds only to you. |
 | `python -m jarvis.main voice-test tts` | Diagnostics: play a test sentence (is audio out working?). |
 | `python -m jarvis.main voice-test stt` | Diagnostics: record 4s and print the transcript (does it hear you?). |
@@ -122,9 +157,13 @@ Always run inside the activated venv (`source .venv/bin/activate`), and use the
 | `python -m jarvis.main remind "text \| +30m"` | Add a reminder (`+30m`, `+2h`, `+1d`) — §38. |
 | `python -m jarvis.main brief` | Daily briefing: calendar + waiting-on-you + prepared items — §40. |
 | `python -m jarvis.main tasks` | Show what's waiting on you + upcoming reminders — §30, §38. |
+| `python -m jarvis.main telegram-poll` | One-shot Telegram diagnostic: poll allowlisted messages once and reply. Normal voice mode already polls Telegram continuously. |
 | `python -m jarvis.main bench [N]` | Benchmark time-to-first-word over N turns (§18 latency metric). |
+| `python -m jarvis.main consolidate` | Run the nightly memory consolidation pass immediately (§8). |
 | `python -m jarvis.main set-model gpt-4o` | Set the main brain model (e.g. `gpt-4o`, `gpt-4o-mini`). |
 | `python -m jarvis.main set-model` | Show the current brain model. |
+| `python -m jarvis.main onboarding-status` | Show sandbox/model/token readiness without revealing secrets. |
+| `python -m jarvis.main live-smoke` | Print the live dogfood checklist for voice, Gmail, browser, shell approval, and Telegram. |
 | `python -m jarvis.main backup` | Encrypted snapshot of memory. |
 | `python -m jarvis.main` | Phase 0 safety demo (write / read / outside / send / kill). |
 | `python -m pytest -q` | Run the full test suite. |
@@ -136,7 +175,8 @@ immediately and cannot be disabled by Jarvis. (Robust to the STT mishearing "end
 
 ### Environment variables (voice tuning)
 
-Set before the command, e.g. `JARVIS_STT_MODEL=large-v3 python -m jarvis.main voice`.
+`python -m jarvis.main voice` asks these one by one at startup. You can still set them before
+the command for automation, or use `--no-voice-preflight` to skip prompts.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -147,7 +187,19 @@ Set before the command, e.g. `JARVIS_STT_MODEL=large-v3 python -m jarvis.main vo
 | `JARVIS_REQUIRE_OWNER` | `1` | Owner-only voice (if enrolled). `0` = respond to any voice even when enrolled. |
 | `JARVIS_SPEAKER_THRESHOLD` | `0.25` | Voice-match strictness. Lower (e.g. `0.15`) = more lenient if it rejects you. |
 | `JARVIS_VOICE_DEBUG` | `1` | Verbose voice logs (wake scores, speaker match, capture, timing). `0` = quiet. |
+| `JARVIS_CONSOLIDATION_HOUR` | `2` | Hour of day when voice/proactive mode runs the memory sleep pass. |
+| `JARVIS_TELEGRAM_POLL_SECONDS` | `5` | How often active voice mode checks Telegram for new messages. |
 | `LANGSMITH_API_KEY` | (unset) | Set it (+ `pip install langsmith`) to trace every model call in LangSmith (§2A.5). Pair with `LANGSMITH_TRACING=true` and optional `LANGSMITH_PROJECT=jarvis`. |
+
+Examples:
+
+```bash
+# Interactive, recommended for normal use:
+python -m jarvis.main voice
+
+# Automation/no prompts, use env/defaults:
+JARVIS_STT_MODEL=small.en JARVIS_ADDRESSING=0 python -m jarvis.main voice --no-voice-preflight
+```
 
 ### Owner-only voice (§3)
 
@@ -187,6 +239,10 @@ python -m jarvis.main voice
 # Balanced (cheap chat brain, reliable addressing):
 python -m jarvis.main set-model gpt-4o-mini      # gpt-4o still used for addressing
 python -m jarvis.main voice
+
+# GLM/Z.ai for the voice session:
+python -m jarvis.main voice
+# choose "glm" at Brain provider and enter a GLM model such as "glm-5.2"
 
 # Cheapest / fastest:
 JARVIS_ADDRESSING=0 JARVIS_STT_MODEL=small.en python -m jarvis.main voice
@@ -237,12 +293,39 @@ ask for spoken approval. Say a clear "yes/approve" to continue or "no/cancel" to
 The `browse` tool needs Playwright: `pip install playwright && playwright install chromium`.
 Now `agent "research X and summarise"` actually searches the web instead of answering from memory.
 
-**Gmail via Playwright:** `gmail_inbox`, `gmail_draft`, and `gmail_send` use a persistent Chromium
+**Gmail via Playwright:** `gmail_inbox`, `gmail_draft`, and `gmail_send` use a persistent Chrome
 profile at `<config-dir>/browser/gmail-profile`. First use opens Gmail in a real browser; log in
 once and Jarvis reuses that session. `gmail_send` is still irreversible and approval-gated.
+The connector prefers your installed **Google Chrome** channel because Google may block sign-in
+from Playwright's bundled Chromium as "not secure". If login shows that warning, install/use Chrome:
+
+```bash
+python -m playwright install chrome
+python -m jarvis.main agent "read my latest Gmail inbox items"
+```
+
+If Google still says "This browser or app may not be secure", that is Google refusing
+automation-based login for the account. At that point the correct fix is the official Gmail
+API/OAuth connector, not more browser-login retries.
 
 **Telegram (optional, free):** store `telegram_bot_token` and `telegram_chat_id` in the vault
-(via `--onboard`) to get phone notifications when you're away from the PC.
+(via `--onboard`) to get phone notifications when you're away from the PC. In `voice` mode,
+Jarvis also polls Telegram for inbound commands:
+
+```text
+/tasks                         waiting/reminder summary
+/brief                         daily brief
+/notes                         list staged notes
+/items                         list all staged review items
+/jobs                          list background tasks
+/delete-note <id|all>          delete one staged note/item, or all staged notes
+/update-note <id> <text>       replace a staged note body
+/cancel-task <id>              mark a non-running background task cancelled
+/delete-task <id>              remove a background task record
+```
+
+Plain messages still go to Jarvis as normal requests. Destructive Telegram commands are bounded
+to Jarvis's own staged notes and task records; they do not delete arbitrary files.
 
 ### Proactive speaker — Jarvis talks first (§25)
 
@@ -274,7 +357,7 @@ the reminder. Real Gmail/browser actions plug into the same connector interfaces
 
 ```bash
 python -m jarvis.main set-endpoint https://api.z.ai/api/paas/v4
-python -m jarvis.main set-model glm-4.6
+python -m jarvis.main set-model glm-5.2
 python -m jarvis.main set-endpoint default   # back to OpenAI default
 ```
 

@@ -90,6 +90,18 @@ class TaskQueue:
         )
         self._conn.commit()
 
+    def delete(self, job_id: str) -> bool:
+        cur = self._conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def cancel(self, job_id: str) -> bool:
+        job = self.get(job_id)
+        if job is None or job.status == JobStatus.RUNNING.value:
+            return False
+        self.update(job_id, JobStatus.FAILED, "cancelled by user")
+        return True
+
     def get(self, job_id: str) -> Optional[Job]:
         r = self._conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         return self._row_to_job(r) if r else None

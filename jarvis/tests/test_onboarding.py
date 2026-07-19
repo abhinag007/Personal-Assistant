@@ -1,6 +1,6 @@
 """Onboarding tests (§41) — keep-or-change secrets on re-run; Telegram fields."""
 from jarvis.config import Config
-from jarvis.onboarding.wizard import _configure_brain, _manage_secret
+from jarvis.onboarding.wizard import _configure_brain, _manage_secret, _print_setup_summary
 from jarvis.vault import Vault, FileKeyProvider
 
 
@@ -72,3 +72,19 @@ def test_configure_brain_glm_stores_glm_key_and_endpoint(tmp_path):
     assert cfg.model == "glm-5.2"
     assert cfg.api_key_secret == "glm_api_key"
     assert v.get_secret("glm_api_key") == "sk-glm"
+
+
+def test_setup_summary_reports_provider_without_secret_value(tmp_path):
+    v = _vault(tmp_path)
+    v.set_secret("glm_api_key", "sk-secret-value")
+    v.set_secret("telegram_bot_token", "bot-token")
+    v.set_secret("telegram_chat_id", "123")
+    cfg = Config(base_url="https://api.z.ai/api/paas/v4", model="glm-5.2",
+                 api_key_secret="glm_api_key")
+    prints = []
+    _print_setup_summary(cfg, v, print_fn=prints.append)
+    text = "\n".join(prints)
+    assert "GLM/Z.ai" in text
+    assert "glm_api_key (set)" in text
+    assert "ready for outbound + inbound" in text
+    assert "sk-secret-value" not in text

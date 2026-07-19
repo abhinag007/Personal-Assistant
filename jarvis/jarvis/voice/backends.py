@@ -190,7 +190,11 @@ class KokoroTTS(TTS):
                 from kokoro import KPipeline
             except ImportError as e:
                 raise ImportError(f"Kokoro TTS not installed. {_INSTALL_HINT}") from e
-            self._pipe = KPipeline(lang_code=self.lang_code)
+            # Be explicit to avoid Kokoro's default-repository startup warning.
+            self._pipe = KPipeline(
+                lang_code=self.lang_code,
+                repo_id="hexgrad/Kokoro-82M",
+            )
         return self._pipe
 
     def load(self) -> None:

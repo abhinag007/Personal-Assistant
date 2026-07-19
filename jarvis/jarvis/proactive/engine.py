@@ -28,6 +28,7 @@ class ProactiveEngine:
         presence=None,
         quiet_hours: str = "",          # e.g. "22:00-07:00"
         briefing_hour: Optional[int] = None,
+        consolidation=None,            # NightlyConsolidationScheduler (§8)
         adapter=None,                   # model → phrase updates conversationally (§34)
         user_name: Optional[str] = None,
         log=print,
@@ -39,6 +40,7 @@ class ProactiveEngine:
         self.presence = presence
         self.quiet_hours = quiet_hours
         self.briefing_hour = briefing_hour
+        self.consolidation = consolidation
         self.adapter = adapter
         self.user_name = user_name
         self.log = log
@@ -130,6 +132,11 @@ class ProactiveEngine:
     def poll(self, now: Optional[float] = None) -> list[str]:
         """Return announcements to SPEAK (present). Routes to phone when away; [] if quiet."""
         now = now if now is not None else time.time()
+        if self.consolidation is not None:
+            try:
+                self.consolidation.poll(now=now)
+            except Exception as e:
+                self.log(f"[memory] consolidation scheduler error: {e}")
         if self.in_quiet_hours(now):
             # Still consume events so they don't all fire at once when quiet hours end,
             # but stay silent. (Reminders remain visible via `tasks`/`brief`.)

@@ -96,6 +96,29 @@ def test_learns_name_from_conversation(tmp_path):
     assert any("name is Abhi" in r.text for r in mem.all_records())
 
 
+def test_distinguishes_name_from_preferred_address(tmp_path):
+    brain, mem, _ = _brain(tmp_path)
+    brain.handle_turn("my name is not sir it's Abhijeet Nag", speak=lambda c: None)
+    brain.handle_turn("refer to me as sir", speak=lambda c: None)
+
+    assert brain.user_name == "Abhijeet Nag"
+    assert brain.preferred_address == "Sir"
+    assert mem.get_profile("name") == "Abhijeet Nag"
+    assert mem.get_profile("preferred_address") == "Sir"
+
+
+def test_what_is_my_name_uses_profile_not_model(tmp_path):
+    brain, mem, _ = _brain(tmp_path)
+    brain.handle_turn("my name is Abhijeet Nag", speak=lambda c: None)
+    brain.handle_turn("refer to me as sir", speak=lambda c: None)
+
+    spoken = []
+    reply = brain.handle_turn("what is my name", speak=spoken.append)
+
+    assert reply == "Your name is Abhijeet Nag. You asked me to address you as Sir."
+    assert "".join(spoken) == reply
+
+
 def test_learned_name_persists_across_restart(tmp_path):
     """The learned name is durable — a new BrainLoop on the same DB still knows it."""
     brain, mem, _ = _brain(tmp_path)

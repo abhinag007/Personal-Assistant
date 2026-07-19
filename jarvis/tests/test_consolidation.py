@@ -4,6 +4,7 @@ import time
 from jarvis.memory import MemoryStore, Tier
 from jarvis.memory.consolidation import Consolidator
 from jarvis.memory.embedder import HashEmbedder
+from jarvis.memory.scheduler import NightlyConsolidationScheduler
 
 
 def _store(tmp_path):
@@ -40,3 +41,20 @@ def test_nothing_is_deleted(tmp_path):
     Consolidator(m).run(now=future)
     # Demoted, never removed.
     assert m.count() == 1
+
+
+def test_nightly_scheduler_runs_once_after_configured_hour(tmp_path):
+    m = _store(tmp_path)
+    mem_id = m.add("hot scheduled memory", tier=Tier.UNCONSCIOUS)
+    for _ in range(3):
+        m.recall("hot scheduled memory", k=1)
+    m.set_tier(mem_id, int(Tier.UNCONSCIOUS))
+    scheduler = NightlyConsolidationScheduler(
+        m, tmp_path / "consolidation_state.json", hour=2, log=lambda *_: None)
+
+    before_hour = time.mktime(time.struct_time((2026, 7, 19, 1, 30, 0, 0, 0, -1)))
+    after_hour = time.mktime(time.struct_time((2026, 7, 19, 2, 30, 0, 0, 0, -1)))
+    assert scheduler.poll(now=before_hour) is None
+    summary = scheduler.poll(now=after_hour)
+    assert summary and summary["promoted"] >= 1
+    assert scheduler.poll(now=after_hour + 60) is None

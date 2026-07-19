@@ -49,6 +49,11 @@ def test_router_single_for_plain_search():
     assert route_mode("search the web for the weather") is Mode.M2_AGENT
 
 
+def test_router_gmail_inbox_uses_agent():
+    assert route_mode("read my latest Gmail inbox items") is Mode.M2_AGENT
+    assert route_mode("check my inbox") is Mode.M2_AGENT
+
+
 # ---- agent (ReAct) -------------------------------------------------------
 
 def test_agent_uses_tool_then_finishes():

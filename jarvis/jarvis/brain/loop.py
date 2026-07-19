@@ -24,7 +24,7 @@ from ..tracing import Tracer
 from .curiosity import asked_flag, next_curiosity
 from .dialog import DialogWindow
 from .facts import extract_facts
-from .identity import extract_name
+from .identity import extract_name, extract_preferred_address
 from .persona import build_system_prompt
 
 
@@ -63,6 +63,11 @@ class BrainLoop:
         """The name Jarvis currently knows — learned from conversation, else the fallback."""
         return self.memory.get_profile("name") or self._fallback_name
 
+    @property
+    def preferred_address(self) -> Optional[str]:
+        """How the user wants to be addressed, separate from their real name."""
+        return self.memory.get_profile("preferred_address")
+
     # ---- one conversational turn ----------------------------------------
 
     def handle_turn(self, text: str, *, speak: Optional[Callable[[str], None]] = None) -> str:
@@ -74,6 +79,15 @@ class BrainLoop:
             return ""  # (trigger() exits before we get here in production)
 
         with self.tracer.span("handle_turn", input=text) as span:
+            self._learn_from(text, span)
+            direct = self._direct_profile_answer(text)
+            if direct is not None:
+                emit(direct)
+                self.dialog.add_user(text)
+                self.dialog.add_assistant(direct)
+                self.memory.add(f"{self.user_name or 'The user'} said: {text}", MemoryType.EPISODIC)
+                return direct
+
             # 2. Recall relevant memories (§8).
             with self.tracer.span("memory.recall", cue=text):
                 recalled = self.memory.recall(text, k=self.recall_k)
@@ -100,10 +114,7 @@ class BrainLoop:
             self.last_ttfw = (first_token_at - start) if first_token_at else None
             span.set("ttfw_s", round(self.last_ttfw, 3) if self.last_ttfw else None)
 
-            # 5. Learn from what the user said (§8): name (regex) + facts (model extraction).
-            self._learn_from(text, span)
-
-            # 6. Curiosity: append ONE question about the next thing it doesn't know yet.
+            # 5. Curiosity: append ONE question about the next thing it doesn't know yet.
             reply = model_reply
             if self.curious:
                 nxt = next_curiosity(self.memory.all_profile())
@@ -115,12 +126,12 @@ class BrainLoop:
                     self.memory.set_profile(asked_flag(field), "1")
                     span.set("asked_about", field)
 
-            # 7. Update dialog + long-term episodic memory.
+            # 6. Update dialog + long-term episodic memory.
             self.dialog.add_assistant(reply)
             speaker_label = self.user_name or "The user"
             self.memory.add(f"{speaker_label} said: {text}", MemoryType.EPISODIC)
 
-            # 6. Audit.
+            # 7. Audit.
             if self.audit:
                 self.audit.record(
                     "conversation", f"Handled a turn from {self.user_name}",
@@ -141,6 +152,13 @@ class BrainLoop:
                             MemoryType.SEMANTIC, salience=0.9)
             span.set("learned_name", learned)
 
+        preferred = extract_preferred_address(text)
+        if preferred and preferred != self.memory.get_profile("preferred_address"):
+            self.memory.set_profile("preferred_address", preferred)
+            self.memory.add(f"The user prefers to be addressed as {preferred}.",
+                            MemoryType.SEMANTIC, salience=0.9)
+            span.set("preferred_address", preferred)
+
         # Other durable facts — model-based extraction (no-op offline / on failure).
         if self.extract_facts_enabled:
             with self.tracer.span("facts.extract"):
@@ -152,6 +170,22 @@ class BrainLoop:
                                     MemoryType.SEMANTIC, salience=0.8)
             if facts:
                 span.set("learned_facts", list(facts.keys()))
+
+    def _direct_profile_answer(self, text: str) -> Optional[str]:
+        low = text.strip().lower()
+        if not low:
+            return None
+        if "what is my name" not in low and "what's my name" not in low:
+            return None
+        name = self.user_name
+        preferred = self.preferred_address
+        if name and preferred and preferred.lower() != name.lower():
+            return f"Your name is {name}. You asked me to address you as {preferred}."
+        if name:
+            return f"Your name is {name}."
+        if preferred:
+            return f"I do not know your name yet. You asked me to address you as {preferred}."
+        return "I do not know your name yet."
 
     # ---- voice-safe confirmation for irreversible actions (§11, §35) -----
 

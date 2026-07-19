@@ -14,6 +14,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +29,161 @@ from .core.sandbox_guard import SandboxGuard, SandboxViolation
 from .onboarding import run_onboarding
 
 
+def _ask_bool(prompt: str, default: bool, *, input_fn=input, print_fn=print) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    while True:
+        ans = input_fn(f"{prompt} ({suffix}): ").strip().lower()
+        if not ans:
+            return default
+        if ans in ("y", "yes", "t", "true", "1", "on"):
+            return True
+        if ans in ("n", "no", "f", "false", "0", "off"):
+            return False
+        print_fn("  Please answer yes/no, y/n, true/false, or press Enter for the default.")
+
+
+def _ask_text(prompt: str, default: str, *, input_fn=input) -> str:
+    ans = input_fn(f"{prompt} [{default}]: ").strip()
+    return ans or default
+
+
+def _default_voice_brain_provider(cfg: Config | None) -> str:
+    if not cfg:
+        return "openai"
+    if cfg.api_key_secret == "glm_api_key" or "z.ai" in cfg.base_url.lower() or "bigmodel" in cfg.base_url.lower():
+        return "glm"
+    return "openai"
+
+
+def _voice_preflight(*, input_fn=input, print_fn=print, environ=None, cfg: Config | None = None,
+                     saved_options: dict | None = None) -> dict:
+    """Interactive voice startup options, replacing shell env juggling for normal use."""
+    env = environ if environ is not None else os.environ
+    saved = saved_options or {}
+
+    def saved_or_env(key: str, env_name: str, fallback: str) -> str:
+        # Explicit terminal environment variables still win for automation.
+        return env.get(env_name, str(saved.get(key, fallback)))
+
+    def saved_bool_or_env(key: str, env_name: str, fallback: bool) -> bool:
+        if env_name in env:
+            return env[env_name] not in ("0", "false", "False", "no", "off")
+        value = saved.get(key, fallback)
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() not in ("0", "false", "no", "off")
+
+    print_fn("\n[Jarvis] Voice startup options. Press Enter to accept defaults.\n")
+    print_fn("  Brain provider: openai uses your OpenAI key; glm uses your GLM/Z.ai key and endpoint.")
+    print_fn("  Brain model: the main assistant model for this voice session.")
+    print_fn("  STT model: small.en is fastest, medium.en is balanced, large-v3 is most accurate.")
+    print_fn("  Wake mode: stt uses Whisper to hear 'Hey Jarvis' reliably; model uses openWakeWord.")
+    print_fn("  Smart addressing: yes means Jarvis ignores side conversations; no means it replies to every utterance during a session.")
+    print_fn("  Owner voice: yes means an enrolled voiceprint is required; no lets any voice talk to Jarvis.")
+    print_fn("  Daily briefing: blank disables it; if you enter an hour already passed today, it may speak immediately.")
+    print_fn("  Telegram poll interval: how often phone messages are checked while voice mode runs.")
+    print_fn("  Shell tool: yes enables run_command for this session, but every shell command still asks approval.\n")
+    default_provider = saved_or_env("brain_provider", "JARVIS_BRAIN_PROVIDER",
+                                    _default_voice_brain_provider(cfg))
+    brain_provider = _ask_text("Brain provider (openai/glm)", default_provider, input_fn=input_fn).strip().lower()
+    if brain_provider in ("gml", "glm", "zai", "z.ai", "z"):
+        brain_provider = "glm"
+    elif brain_provider in ("openai", "open ai", "oai", "o"):
+        brain_provider = "openai"
+
+    saved_model = saved.get("brain_model")
+    env_model = env.get("JARVIS_MODEL")
+    if env_model:
+        default_brain_model = env_model
+    elif saved_model:
+        default_brain_model = str(saved_model)
+    elif brain_provider == "glm":
+        default_brain_model = cfg.model if cfg and _default_voice_brain_provider(cfg) == "glm" else "glm-5.2"
+    else:
+        default_brain_model = cfg.model if cfg else "gpt-4o-mini"
+
+    opts = {
+        "brain_provider": brain_provider,
+        "brain_model": _ask_text("Brain model", default_brain_model, input_fn=input_fn),
+        "stt_model": _ask_text("STT model (small.en / medium.en / large-v3)",
+                               saved_or_env("stt_model", "JARVIS_STT_MODEL", "medium.en"), input_fn=input_fn),
+        "wake_mode": _ask_text("Wake mode (stt/model)",
+                               saved_or_env("wake_mode", "JARVIS_WAKE_MODE", "stt"), input_fn=input_fn),
+        "addressing": _ask_bool("Use smart 'is this addressed to Jarvis' check",
+                                saved_bool_or_env("addressing", "JARVIS_ADDRESSING", True),
+                                input_fn=input_fn, print_fn=print_fn),
+        "addressing_model": _ask_text("Addressing model",
+                                      saved_or_env("addressing_model", "JARVIS_ADDRESSING_MODEL", "gpt-4o"),
+                                      input_fn=input_fn),
+        "require_owner": _ask_bool("Require enrolled owner voice if a voiceprint exists",
+                                   saved_bool_or_env("require_owner", "JARVIS_REQUIRE_OWNER", True),
+                                   input_fn=input_fn, print_fn=print_fn),
+        "speaker_threshold": _ask_text("Speaker threshold",
+                                       saved_or_env("speaker_threshold", "JARVIS_SPEAKER_THRESHOLD", "0.25"),
+                                       input_fn=input_fn),
+        "voice_debug": _ask_bool("Show verbose voice debug logs",
+                                 saved_bool_or_env("voice_debug", "JARVIS_VOICE_DEBUG", True),
+                                 input_fn=input_fn, print_fn=print_fn),
+        "consolidation_hour": _ask_text("Nightly memory consolidation hour (0-23)",
+                                        saved_or_env("consolidation_hour", "JARVIS_CONSOLIDATION_HOUR", "2"),
+                                        input_fn=input_fn),
+        "briefing_hour": _ask_text("Daily spoken briefing hour, or blank for none",
+                                   saved_or_env("briefing_hour", "JARVIS_BRIEF_HOUR", ""),
+                                   input_fn=input_fn),
+        "allow_shell": _ask_bool("Enable shell command tool for this session",
+                                 saved_bool_or_env("allow_shell", "JARVIS_ALLOW_SHELL", False),
+                                 input_fn=input_fn, print_fn=print_fn),
+        "telegram_poll_seconds": _ask_text("Telegram poll interval in seconds",
+                                             saved_or_env("telegram_poll_seconds",
+                                                          "JARVIS_TELEGRAM_POLL_SECONDS", "5"),
+                                             input_fn=input_fn),
+    }
+    return opts
+
+
+def _apply_voice_options(opts: dict, *, environ=None) -> None:
+    env = environ if environ is not None else os.environ
+    mapping = {
+        "brain_model": "JARVIS_MODEL",
+        "stt_model": "JARVIS_STT_MODEL",
+        "wake_mode": "JARVIS_WAKE_MODE",
+        "addressing_model": "JARVIS_ADDRESSING_MODEL",
+        "speaker_threshold": "JARVIS_SPEAKER_THRESHOLD",
+        "consolidation_hour": "JARVIS_CONSOLIDATION_HOUR",
+        "briefing_hour": "JARVIS_BRIEF_HOUR",
+        "telegram_poll_seconds": "JARVIS_TELEGRAM_POLL_SECONDS",
+    }
+    for key, env_name in mapping.items():
+        value = str(opts.get(key, ""))
+        if value:
+            env[env_name] = value
+        elif env_name in env:
+            env.pop(env_name)
+    env["JARVIS_ADDRESSING"] = "1" if opts.get("addressing") else "0"
+    env["JARVIS_REQUIRE_OWNER"] = "1" if opts.get("require_owner") else "0"
+    env["JARVIS_VOICE_DEBUG"] = "1" if opts.get("voice_debug") else "0"
+    env["JARVIS_ALLOW_SHELL"] = "1" if opts.get("allow_shell") else "0"
+    provider = str(opts.get("brain_provider", "")).strip().lower()
+    env["JARVIS_BRAIN_PROVIDER"] = provider
+    if provider == "glm":
+        env["JARVIS_BASE_URL"] = "https://api.z.ai/api/paas/v4"
+        env["JARVIS_API_KEY_SECRET"] = "glm_api_key"
+    elif provider == "openai":
+        env["JARVIS_BASE_URL"] = ""
+        env["JARVIS_API_KEY_SECRET"] = "openai_api_key"
+
+
+def _saved_voice_options(cfg: Config) -> dict:
+    """Return the last interactive voice choices, never including credentials."""
+    options = cfg.extra.get("voice_options", {})
+    return options if isinstance(options, dict) else {}
+
+
+def _save_voice_options(cfg: Config, config_dir: Path, opts: dict) -> None:
+    cfg.extra["voice_options"] = dict(opts)
+    cfg.save(config_dir)
+
+
 def _build_brain(config_dir: Path, cfg: Config):
     """Assemble the Phase 1 brain: model adapter + memory + tracer + safety spine."""
     from .audit import AuditLog
@@ -36,21 +193,24 @@ def _build_brain(config_dir: Path, cfg: Config):
     from .memory import AdapterEmbedder, HashEmbedder, MemoryStore
     from .tracing.tracer import LocalTracer
     from .vault import Vault, KeyringKeyProvider
+    import os as _os
 
     # Choose the brain: OpenAI if a key is stored, else the offline mock.
     provider = "mock"
     api_key = None
     try:
         vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
-        api_key = vault.get_secret(getattr(cfg, "api_key_secret", "openai_api_key"))
+        key_slot = _os.environ.get("JARVIS_API_KEY_SECRET") or getattr(cfg, "api_key_secret", "openai_api_key")
+        api_key = vault.get_secret(key_slot)
         if api_key:
             provider = "openai"
     except Exception:
         pass
 
-    import os as _os
-    base_url = cfg.base_url or _os.environ.get("JARVIS_BASE_URL") or None
-    adapter = build_adapter(provider, api_key=api_key, model=cfg.model, base_url=base_url)
+    base_url_env = _os.environ.get("JARVIS_BASE_URL")
+    base_url = (base_url_env if base_url_env is not None else cfg.base_url) or None
+    model = _os.environ.get("JARVIS_MODEL") or cfg.model
+    adapter = build_adapter(provider, api_key=api_key, model=model, base_url=base_url)
     # Real embeddings only for genuine OpenAI; custom endpoints (GLM) may not embed → hash.
     use_real_embed = provider == "openai" and not base_url
     embedder = AdapterEmbedder(adapter) if use_real_embed else HashEmbedder()
@@ -176,12 +336,39 @@ def _chat(config_dir: Path):
         print("\n")
 
 
-def _voice(config_dir: Path, *, force_stub: bool = False):
+def _voice(config_dir: Path, *, force_stub: bool = False, preflight: bool = True):
     """Phase 1 — real always-on voice loop (wake word arms a listening session)."""
     cfg = Config.load(config_dir)
     if not cfg.onboarded:
         print("No setup found. Run:  python -m jarvis.main --onboard")
         sys.exit(1)
+
+    if preflight and not force_stub:
+        saved_options = _saved_voice_options(cfg)
+        if saved_options and {"brain_provider", "brain_model"} - set(saved_options):
+            print("[Jarvis] Voice settings need review because brain provider/model options were added.")
+            options = _voice_preflight(cfg=cfg, saved_options=saved_options)
+            _apply_voice_options(options)
+            _save_voice_options(cfg, config_dir, options)
+            print("[Jarvis] Voice settings saved for future starts.")
+        elif saved_options:
+            use_saved = _ask_bool(
+                "Run with previous voice settings",
+                True,
+            )
+            if use_saved:
+                _apply_voice_options(saved_options)
+                print("[Jarvis] Using previous voice settings. Start with --no-voice-preflight to skip this question.")
+            else:
+                options = _voice_preflight(cfg=cfg, saved_options=saved_options)
+                _apply_voice_options(options)
+                _save_voice_options(cfg, config_dir, options)
+                print("[Jarvis] Voice settings saved for future starts.")
+        else:
+            options = _voice_preflight(cfg=cfg)
+            _apply_voice_options(options)
+            _save_voice_options(cfg, config_dir, options)
+            print("[Jarvis] Voice settings saved for future starts.")
 
     brain, adapter, provider, api_key = _build_brain(config_dir, cfg)
 
@@ -195,14 +382,13 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         from .voice.live import LiveVoiceLoop
         from .voice.mic import MicStream
 
-        import os as _os
         wake = OpenWakeWord()
-        stt = FasterWhisperSTT(model_size=_os.environ.get("JARVIS_STT_MODEL", "medium.en"))
+        stt = FasterWhisperSTT(model_size=os.environ.get("JARVIS_STT_MODEL", "medium.en"))
         tts = KokoroTTS()
-        spk_threshold = float(_os.environ.get("JARVIS_SPEAKER_THRESHOLD", "0.25"))
+        spk_threshold = float(os.environ.get("JARVIS_SPEAKER_THRESHOLD", "0.25"))
         speaker = SpeechBrainVerifier(threshold=spk_threshold)
         vp = load_voiceprint(config_dir)
-        owner_env_on = _os.environ.get("JARVIS_REQUIRE_OWNER", "1") != "0"
+        owner_env_on = os.environ.get("JARVIS_REQUIRE_OWNER", "1") != "0"
         # ALWAYS load the voiceprint if it exists — barge-in uses it to tell your voice from
         # Jarvis's own (so speakers don't self-interrupt), even when owner-only responding is off.
         if vp is not None:
@@ -217,7 +403,6 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         else:
             print("[Jarvis] Owner-only responding is off, but your voiceprint is loaded for barge-in.")
 
-        import os
         debug = os.environ.get("JARVIS_VOICE_DEBUG", "1") != "0"
         wake_mode = os.environ.get("JARVIS_WAKE_MODE", "stt")  # "stt" (robust) or "model"
 
@@ -228,11 +413,27 @@ def _voice(config_dir: Path, *, force_stub: bool = False):
         try:
             runtime, _ = _runtime(config_dir, cfg, brain=brain, adapter=adapter, background=True)
             runtime.start_background()   # worker thread for multitasking (§9)
+            try:
+                telegram_interval = float(os.environ.get("JARVIS_TELEGRAM_POLL_SECONDS", "5"))
+            except ValueError:
+                telegram_interval = 5.0
+            _start_telegram_poller(config_dir, runtime, interval=telegram_interval)
             from .proactive import ProactiveEngine
+            from .memory import NightlyConsolidationScheduler
             brief_hour = os.environ.get("JARVIS_BRIEF_HOUR")
+            try:
+                consolidation_hour = int(os.environ.get("JARVIS_CONSOLIDATION_HOUR", "2"))
+            except ValueError:
+                consolidation_hour = 2
+            consolidation = NightlyConsolidationScheduler(
+                brain.memory,
+                config_dir / "memory" / "consolidation_state.json",
+                hour=consolidation_hour,
+            )
             proactive = ProactiveEngine(
                 calendar=runtime.calendar, handoff=runtime.handoff, queue=runtime.task_queue,
                 notifier=runtime.handoff.notifier, presence=runtime.handoff.presence,
+                consolidation=consolidation,
                 quiet_hours=cfg.quiet_hours,
                 briefing_hour=int(brief_hour) if (brief_hour and brief_hour.isdigit()) else None,
                 adapter=adapter, user_name=brain.user_name,   # conversational phrasing (§34)
@@ -452,6 +653,161 @@ def _telegram_chatid(config_dir: Path):
     print("\nStore it with:  python -m jarvis.main --onboard   (Telegram chat id prompt)")
 
 
+def _telegram_credentials(config_dir: Path) -> tuple[str | None, str | None]:
+    """Load Telegram credentials without ever printing their values."""
+    from .vault import Vault, KeyringKeyProvider
+    try:
+        vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
+        return vault.get_secret("telegram_bot_token"), vault.get_secret("telegram_chat_id")
+    except Exception:
+        return None, None
+
+
+def _format_staged_items(items, *, kind: str | None = None) -> str:
+    if kind:
+        items = [item for item in items if item.kind.lower() == kind.lower()]
+    if not items:
+        return f"No staged {kind or 'items'}."
+    lines = [f"Staged {kind or 'items'}:"]
+    for item in items[:20]:
+        body = item.payload.get("body") if isinstance(item.payload, dict) else None
+        suffix = f" - {body[:80]}" if body else ""
+        lines.append(f"- {item.id} [{item.kind}] {item.title}{suffix}")
+    if len(items) > 20:
+        lines.append(f"...and {len(items) - 20} more.")
+    return "\n".join(lines)
+
+
+def _format_jobs(jobs) -> str:
+    if not jobs:
+        return "No background tasks."
+    lines = ["Background tasks:"]
+    for job in jobs[:20]:
+        lines.append(f"- {job.id} [{job.status}] {job.kind}: {job.result or job.payload}")
+    if len(jobs) > 20:
+        lines.append(f"...and {len(jobs) - 20} more.")
+    return "\n".join(lines)
+
+
+def _telegram_help_text() -> str:
+    return ("Commands: /tasks, /brief, /notes, /items, /jobs, "
+            "/delete-note <id|all>, /update-note <id> <text>, "
+            "/cancel-task <id>, /delete-task <id>, or send a normal Jarvis request.")
+
+
+def _telegram_response(runtime, message: str, *, remote: bool) -> str:
+    """Process Telegram's small command set or route a normal Jarvis request."""
+    low = message.strip().lower()
+    if low in ("/tasks", "tasks"):
+        waiting = runtime.handoff.waiting()
+        reminders = runtime.calendar.upcoming()
+        return f"Waiting: {len(waiting)} | reminders: {len(reminders)}"
+    if low in ("/notes", "notes", "list notes", "show notes"):
+        return _format_staged_items(runtime.staging.list(), kind="note")
+    if low in ("/items", "items", "staged items"):
+        return _format_staged_items(runtime.staging.list())
+    if low in ("/jobs", "jobs", "background tasks"):
+        return _format_jobs(runtime.task_queue.list())
+    if low in ("delete all notes", "remove all notes", "/delete-note all", "/delete-notes all"):
+        removed = runtime.staging.discard_kind("note")
+        return f"Deleted {removed} staged note(s)."
+    m = re.match(r"^/(?:delete-note|delete-item)\s+([a-zA-Z0-9_-]+)$", message.strip())
+    if m:
+        item_id = m.group(1)
+        return f"Deleted staged item {item_id}." if runtime.staging.discard(item_id) else f"No staged item found for id {item_id}."
+    m = re.match(r"^/(?:update-note|update-item)\s+([a-zA-Z0-9_-]+)\s+(.+)$", message.strip(), re.S)
+    if m:
+        item_id, body = m.group(1), m.group(2).strip()
+        item = runtime.staging.get(item_id)
+        if item is None:
+            return f"No staged item found for id {item_id}."
+        payload = dict(item.payload or {})
+        payload["body"] = body
+        title = body[:60] or item.title
+        runtime.staging.update(item_id, title=title, payload=payload)
+        return f"Updated staged item {item_id}."
+    m = re.match(r"^/(?:cancel-task|cancel-job)\s+([a-zA-Z0-9_-]+)$", message.strip())
+    if m:
+        job_id = m.group(1)
+        return f"Cancelled task {job_id}." if runtime.task_queue.cancel(job_id) else f"Could not cancel task {job_id}. It may be missing or already running."
+    m = re.match(r"^/(?:delete-task|delete-job)\s+([a-zA-Z0-9_-]+)$", message.strip())
+    if m:
+        job_id = m.group(1)
+        return f"Deleted task {job_id}." if runtime.task_queue.delete(job_id) else f"No task found for id {job_id}."
+    if low in ("/brief", "brief", "/breif", "breif"):
+        from .connectors import build_briefing
+        return build_briefing(calendar=runtime.calendar, handoff=runtime.handoff,
+                              staging=runtime.staging)
+    if low in ("/help", "help"):
+        return _telegram_help_text()
+    chunks = []
+    handler = runtime.handle_from_telegram if remote else runtime.handle
+    return handler(message, speak=chunks.append) or "".join(chunks)
+
+
+def _start_telegram_poller(config_dir: Path, runtime, *, interval: float = 5.0):
+    """Poll Telegram on a daemon thread for the lifetime of voice mode."""
+    from .handoff import TelegramInbox, TelegramNotifier
+    import threading
+    import time
+
+    token, chat = _telegram_credentials(config_dir)
+    if not token or not chat:
+        return None
+
+    inbox = TelegramInbox(token, chat, offset_path=config_dir / "telegram_offset.json")
+    notifier = TelegramNotifier(token, chat)
+    startup_message = _telegram_help_text()
+    try:
+        notifier.send(startup_message)
+        print("[Telegram] startup help sent.")
+    except Exception as e:
+        print(f"[Telegram] startup message error: {e}")
+
+    def poll_forever():
+        while True:
+            try:
+                for message in inbox.poll():
+                    response = _telegram_response(runtime, message, remote=True)
+                    reply = (response or "").strip() or "(no reply)"
+                    notifier.send(reply[:3500])
+                    print(f"[Telegram] handled: {message!r} -> {reply[:160]!r}")
+            except Exception as e:
+                print(f"[Telegram] poll error: {e}")
+            time.sleep(max(1.0, interval))
+
+    thread = threading.Thread(target=poll_forever, name="jarvis-telegram", daemon=True)
+    thread.start()
+    print(f"[Jarvis] Telegram inbound connected (checking every {max(1.0, interval):g}s).")
+    return thread
+
+
+def _telegram_poll(config_dir: Path):
+    """Poll allowlisted Telegram inbound messages once and answer them (§10 Phase 2)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard"); sys.exit(1)
+    from .handoff import TelegramInbox, TelegramNotifier
+
+    token, chat = _telegram_credentials(config_dir)
+    if not token or not chat:
+        print("[Jarvis] Telegram token/chat id missing. Run --onboard and store both.")
+        return
+
+    inbox = TelegramInbox(token, chat, offset_path=config_dir / "telegram_offset.json")
+    notifier = TelegramNotifier(token, chat)
+    messages = inbox.poll()
+    if not messages:
+        print("[Jarvis] No new allowlisted Telegram messages.")
+        return
+
+    rt, _ = _runtime(config_dir, cfg)
+    for msg in messages:
+        response = _telegram_response(rt, msg, remote=False)
+        notifier.send(response[:3500])
+        print(f"[Jarvis] Telegram handled: {msg!r} -> {response[:120]!r}")
+
+
 def _hitl(action: str | None):
     """Interactive demo of LangGraph human-in-the-loop: pause → you answer → resume (§11)."""
     action = action or "send $500 to Bob"
@@ -525,6 +881,19 @@ def _backup(config_dir: Path, dest: str | None):
     print(f"[Jarvis] Encrypted memory backup written to: {out}")
 
 
+def _consolidate(config_dir: Path):
+    """Run the memory sleep pass immediately (§8)."""
+    cfg = Config.load(config_dir)
+    if not cfg.onboarded:
+        print("No setup found. Run:  python -m jarvis.main --onboard")
+        sys.exit(1)
+    brain, adapter, provider, _ = _build_brain(config_dir, cfg)
+    from .memory import Consolidator
+
+    summary = Consolidator(brain.memory).run()
+    print(f"[Jarvis] Memory consolidated: {summary}")
+
+
 def _set_model(config_dir: Path, model: str | None):
     cfg = Config.load(config_dir)
     if not model:
@@ -557,18 +926,81 @@ def _set_endpoint(config_dir: Path, url: str | None):
     print(f"[Jarvis] Active API key vault entry: {cfg.api_key_secret}")
 
 
+def _onboarding_status(config_dir: Path):
+    """Show readiness status without revealing secret values."""
+    cfg = Config.load(config_dir)
+    print("[Jarvis] Onboarding status")
+    print(f"  onboarded: {'yes' if cfg.onboarded else 'no'}")
+    print(f"  sandbox:   {cfg.sandbox_path or '(missing)'}")
+    print(f"  model:     {cfg.model}")
+    print(f"  endpoint:  {cfg.base_url or 'OpenAI default'}")
+    print(f"  key slot:  {cfg.api_key_secret}")
+    try:
+        from .vault import Vault, KeyringKeyProvider
+        vault = Vault(config_dir / "vault.enc", key_provider=KeyringKeyProvider())
+        names = ["openai_api_key", "glm_api_key", "telegram_bot_token", "telegram_chat_id",
+                 cfg.api_key_secret]
+        for name in dict.fromkeys(n for n in names if n):
+            try:
+                present = bool(vault.get_secret(name))
+            except Exception:
+                present = False
+            print(f"  vault:{name}: {'set' if present else 'missing'}")
+    except Exception as e:
+        print(f"  vault: unavailable ({e})")
+
+
+def _live_smoke():
+    """Print the dogfood checklist for Tier 0/1 validation."""
+    print("""[Jarvis] Live-smoke checklist
+
+1. Voice hardware
+   python -m jarvis.main voice-test mic
+   python -m jarvis.main voice-test stt
+   python -m jarvis.main voice-test tts
+   python -m jarvis.main voice
+
+2. Brain + latency
+   python -m jarvis.main onboarding-status
+   python -m jarvis.main bench 12
+
+3. Browser/Gmail
+   pip install playwright && playwright install chromium
+   python -m playwright install chrome    # if Gmail login says the browser is insecure
+   python -m jarvis.main agent "read my latest Gmail inbox items"
+   python -m jarvis.main agent "draft an email to me@example.com with subject test and body hello"
+
+4. Approval gates
+   JARVIS_ALLOW_SHELL=1 python -m jarvis.main agent "run command echo jarvis-smoke"
+   Say/enter yes only if the requested command is exactly what you expect.
+
+5. Telegram inbound
+   Start: python -m jarvis.main voice
+   Send your bot: /tasks
+   Expect a Telegram reply within about 5 seconds.
+   (telegram-poll remains available as a one-shot diagnostic.)
+
+6. Real chain
+   python -m jarvis.main agent "research today's top AI news, draft me a Gmail summary, ask before sending"
+
+Record failures with the exact command, expected behavior, actual behavior, and logs.""")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="JARVIS")
     parser.add_argument("command", nargs="?", default="demo",
                         choices=["demo", "chat", "voice", "voice-enroll", "voice-test",
                                  "agent", "remind", "brief", "tasks", "telegram-chatid",
-                                 "search", "hitl", "bench", "backup", "set-model",
-                                 "set-endpoint"],
+                                 "telegram-poll", "search", "hitl", "bench", "backup",
+                                 "consolidate", "set-model", "set-endpoint",
+                                 "onboarding-status", "live-smoke"],
                         help="what to run (default: demo)")
     parser.add_argument("arg", nargs="?", default=None, help="argument for the command")
     parser.add_argument("--onboard", action="store_true", help="run first-run setup")
     parser.add_argument("--config-dir", default=str(DEFAULT_CONFIG_DIR), help="config directory")
     parser.add_argument("--dest", default=None, help="backup destination directory")
+    parser.add_argument("--no-voice-preflight", action="store_true",
+                        help="start voice with env/default options, without interactive prompts")
     args = parser.parse_args(argv)
 
     config_dir = Path(args.config_dir)
@@ -579,7 +1011,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "chat":
         _chat(config_dir)
     elif args.command == "voice":
-        _voice(config_dir)
+        _voice(config_dir, preflight=not args.no_voice_preflight)
     elif args.command == "voice-enroll":
         _voice_enroll(config_dir)
     elif args.command == "voice-test":
@@ -594,6 +1026,8 @@ def main(argv: list[str] | None = None) -> None:
         _tasks(config_dir)
     elif args.command == "telegram-chatid":
         _telegram_chatid(config_dir)
+    elif args.command == "telegram-poll":
+        _telegram_poll(config_dir)
     elif args.command == "search":
         _search(config_dir, args.arg)
     elif args.command == "hitl":
@@ -602,10 +1036,16 @@ def main(argv: list[str] | None = None) -> None:
         _bench(config_dir, args.arg)
     elif args.command == "backup":
         _backup(config_dir, args.dest)
+    elif args.command == "consolidate":
+        _consolidate(config_dir)
     elif args.command == "set-model":
         _set_model(config_dir, args.arg)
     elif args.command == "set-endpoint":
         _set_endpoint(config_dir, args.arg)
+    elif args.command == "onboarding-status":
+        _onboarding_status(config_dir)
+    elif args.command == "live-smoke":
+        _live_smoke()
     else:
         _demo(config_dir)
 

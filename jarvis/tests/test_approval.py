@@ -48,3 +48,25 @@ def test_unknown_action_defaults_to_irreversible():
     decision = engine.evaluate(ActionRequest(ActionType.RUN_COMMAND, "run something"))
     assert decision.risk is ActionRisk.IRREVERSIBLE
     assert decision.approved is False
+
+
+def test_all_action_types_follow_risk_policy_exhaustively():
+    calls = []
+
+    def approver(req, risk):
+        calls.append((req.action, risk))
+        return True
+
+    engine = ApprovalEngine(approver=approver)
+    for action in ActionType:
+        calls.clear()
+        decision = engine.evaluate(ActionRequest(action, f"test {action.value}"))
+        if decision.risk is ActionRisk.REVERSIBLE:
+            assert decision.approved is True
+            assert calls == []
+        elif decision.risk is ActionRisk.IRREVERSIBLE:
+            assert decision.approved is True
+            assert calls == [(action, ActionRisk.IRREVERSIBLE)]
+        elif decision.risk is ActionRisk.FORBIDDEN:
+            assert decision.approved is False
+            assert calls == []

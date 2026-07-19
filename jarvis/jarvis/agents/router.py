@@ -12,10 +12,11 @@ from .state import Mode
 
 # Verbs / shapes that imply an actionable task (→ at least M2).
 _ACTION_CUES = re.compile(
-    r"\b(remind|schedule|book|email|send|draft|find|search|look up|research|"
+    r"\b(remind|schedule|book|email|gmail|inbox|message|send|draft|read|"
+    r"find|search|look up|research|"
     r"summari[sz]e|plan|organi[sz]e|create|make|write|build|check|update|delete|"
     r"add|set up|calculate|compute|"
-    r"open|launch|start|run|close|play|show|go to|navigate|browse to)\b",
+    r"open|launch|start|run|close|play|show|go to|navigate|browse|browse to)\b",
     re.IGNORECASE,
 )
 

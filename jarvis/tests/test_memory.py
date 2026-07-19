@@ -1,4 +1,6 @@
 """Memory tests (§8) — recall, reconsolidation (recall strengthens), tiers."""
+from concurrent.futures import ThreadPoolExecutor
+
 from jarvis.memory import MemoryStore, MemoryType, Tier
 from jarvis.memory.embedder import HashEmbedder
 
@@ -42,3 +44,13 @@ def test_persistence(tmp_path):
     m.close()
     m2 = MemoryStore(tmp_path / "mem.db", embedder=HashEmbedder())
     assert m2.count() == 1
+
+
+def test_memory_store_can_be_used_from_background_thread(tmp_path):
+    m = _store(tmp_path)
+    m.add("Telegram and voice share memory safely", MemoryType.SEMANTIC)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        hits = pool.submit(lambda: m.recall("Telegram voice memory", k=1)).result()
+
+    assert hits
